@@ -162,6 +162,46 @@ public interface EditorSceneHistoryAction {
         }
     }
 
+    /**
+     * Moves a camera to a different position among the cameras, which is the order its group appears
+     * in on the timeline.
+     *
+     * <p>The camera is found by id when applied, so the action stays correct even if other cameras
+     * were added or removed around it in the meantime.
+     */
+    record ReorderCamera(java.util.UUID cameraId, int fromIndex, int toIndex) implements EditorSceneHistoryAction {
+        @Override
+        public void apply(EditorScene editorScene) {
+            for (EditorCamera camera : editorScene.cameras) {
+                if (camera.id.equals(this.cameraId)) {
+                    editorScene.moveCamera(camera, this.toIndex);
+                    return;
+                }
+            }
+        }
+
+        public static class TypeAdapter implements JsonSerializer<ReorderCamera>, JsonDeserializer<ReorderCamera> {
+            @Override
+            public ReorderCamera deserialize(JsonElement json, Type typeOfT, JsonDeserializationContext context) throws JsonParseException {
+                JsonObject jsonObject = json.getAsJsonObject();
+                return new ReorderCamera(
+                    java.util.UUID.fromString(jsonObject.get("camera_id").getAsString()),
+                    jsonObject.get("from_index").getAsInt(),
+                    jsonObject.get("to_index").getAsInt());
+            }
+
+            @Override
+            public JsonElement serialize(ReorderCamera src, Type typeOfSrc, JsonSerializationContext context) {
+                JsonObject jsonObject = new JsonObject();
+                jsonObject.addProperty("action_type", "reorder_camera");
+                jsonObject.addProperty("camera_id", src.cameraId.toString());
+                jsonObject.addProperty("from_index", src.fromIndex);
+                jsonObject.addProperty("to_index", src.toIndex);
+                return jsonObject;
+            }
+        }
+    }
+
     /** Removes a camera without removing its rows; used as the redo of a camera deletion. */
     record RemoveCamera(EditorCamera camera) implements EditorSceneHistoryAction {
         @Override
@@ -235,6 +275,41 @@ public interface EditorSceneHistoryAction {
         }
     }
 
+    /**
+     * Inserts a whole track - keyframes, name, colour, enabled state and owner - at an index.
+     *
+     * <p>This is the inverse of deleting or moving a track. The track is copied as it is inserted, so
+     * the action can be applied more than once (undo, redo, undo) without two timeline states sharing
+     * mutable keyframes.
+     */
+    record RestoreTrack(KeyframeTrack track, int trackIndex) implements EditorSceneHistoryAction {
+        @Override
+        public void apply(EditorScene editorScene) {
+            if (this.trackIndex >= 0 && this.trackIndex <= editorScene.keyframeTracks.size()) {
+                editorScene.keyframeTracks.add(this.trackIndex, this.track.copy());
+            }
+        }
+
+        public static class TypeAdapter implements JsonSerializer<RestoreTrack>, JsonDeserializer<RestoreTrack> {
+            @Override
+            public RestoreTrack deserialize(JsonElement json, Type typeOfT, JsonDeserializationContext context) throws JsonParseException {
+                JsonObject jsonObject = json.getAsJsonObject();
+                KeyframeTrack track = context.deserialize(jsonObject.get("track"), KeyframeTrack.class);
+                int index = jsonObject.get("trackIndex").getAsInt();
+                return new RestoreTrack(track, index);
+            }
+
+            @Override
+            public JsonElement serialize(RestoreTrack src, Type typeOfSrc, JsonSerializationContext context) {
+                JsonObject jsonObject = new JsonObject();
+                jsonObject.addProperty("action_type", "restore_track");
+                jsonObject.add("track", context.serialize(src.track));
+                jsonObject.addProperty("trackIndex", src.trackIndex);
+                return jsonObject;
+            }
+        }
+    }
+
     record RemoveTrack(KeyframeType<?> type, int trackIndex) implements EditorSceneHistoryAction {
         @Override
         public void apply(EditorScene editorScene) {
@@ -278,6 +353,8 @@ public interface EditorSceneHistoryAction {
                 case "remove_track" -> context.deserialize(json, RemoveTrack.class);
                 case "add_camera" -> context.deserialize(json, AddCamera.class);
                 case "remove_camera" -> context.deserialize(json, RemoveCamera.class);
+                case "reorder_camera" -> context.deserialize(json, ReorderCamera.class);
+                case "restore_track" -> context.deserialize(json, RestoreTrack.class);
                 default -> throw new IllegalStateException("Unknown action type: " + type);
             };
         }
@@ -309,6 +386,14 @@ public interface EditorSceneHistoryAction {
                 case RemoveCamera removeCamera -> {
                     jsonObject = (JsonObject) context.serialize(removeCamera);
                     jsonObject.addProperty("action_type", "remove_camera");
+                }
+                case ReorderCamera reorderCamera -> {
+                    jsonObject = (JsonObject) context.serialize(reorderCamera);
+                    jsonObject.addProperty("action_type", "reorder_camera");
+                }
+                case RestoreTrack restoreTrack -> {
+                    jsonObject = (JsonObject) context.serialize(restoreTrack);
+                    jsonObject.addProperty("action_type", "restore_track");
                 }
                 default -> throw new IllegalStateException("Unknown action type: " + src.getClass());
             }

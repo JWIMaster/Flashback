@@ -66,6 +66,15 @@ public class EditorState {
     public double zoomMin = 0.0;
     public double zoomMax = 1.0;
 
+    /**
+     * How wide the timeline's row list is, or 0 to size it to the window.
+     *
+     * <p>A view preference, stored with the project for the same reason the zoom is: it is part of
+     * how this replay is being edited, and re-dragging it every session would be a small annoyance
+     * every session.
+     */
+    public double timelinePanelWidth = 0.0;
+
     public Set<String> usedByPaths = new HashSet<>();
 
     public UUID audioSourceEntity = null;

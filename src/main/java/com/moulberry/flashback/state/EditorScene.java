@@ -188,8 +188,44 @@ public class EditorScene {
         return tracks;
     }
 
-    public boolean hasTrackOfType(EditorCamera camera, KeyframeType<?> type) {
-        for (KeyframeTrack track : this.trackList()) {
+    /** Index of a track in the scene's list, or -1. */
+    public int trackIndexOf(KeyframeTrack track) {
+        return this.trackList().indexOf(track);
+    }
+
+    /** Index of a camera in the scene's registry, or -1. */
+    public int cameraIndexOf(EditorCamera camera) {
+        return this.cameraList().indexOf(camera);
+    }
+
+    /** Moves a track within the scene's list. */
+    public void moveTrack(int fromIndex, int toIndex) {
+        List<KeyframeTrack> tracks = this.trackList();
+        if (fromIndex < 0 || fromIndex >= tracks.size()) {
+            return;
+        }
+        KeyframeTrack track = tracks.remove(fromIndex);
+        tracks.add(Math.max(0, Math.min(toIndex, tracks.size())), track);
+    }
+
+    /**
+     * Moves a camera to a different position among the cameras.
+     *
+     * <p>Camera order is the registry's, and it decides the order of the camera groups on the
+     * timeline. A camera's tracks stay where they are in the track list: they are grouped by their
+     * owner rather than by position, so the group simply appears at its new place.
+     */
+    public void moveCamera(EditorCamera camera, int toIndex) {
+        List<EditorCamera> cameras = this.cameraList();
+        int from = cameras.indexOf(camera);
+        if (from < 0) {
+            return;
+        }
+        cameras.remove(from);
+        cameras.add(Math.max(0, Math.min(toIndex, cameras.size())), camera);
+    }
+
+    public boolean hasTrackOfType(EditorCamera camera, KeyframeType<?> type) {        for (KeyframeTrack track : this.trackList()) {
             if (camera.id.equals(track.cameraId) && track.keyframeType == type) {
                 return true;
             }
@@ -221,8 +257,14 @@ public class EditorScene {
             }
         }
 
-        // No earlier camera has a block, so this camera goes before the scene-level tracks.
-        return this.sceneTrackStart();
+        // No earlier camera has a block, so this camera's rows go before the scene-level tracks -
+        // but never before the switch lane, which belongs at the top of the timeline.
+        int start = this.sceneTrackStart();
+        List<KeyframeTrack> tracks = this.trackList();
+        if (!tracks.isEmpty() && KeyframeTrack.isCameraSwitch(tracks.get(0))) {
+            start = Math.max(start, 1);
+        }
+        return start;
     }
 
     private int lastTrackIndexOwnedBy(EditorCamera camera) {
@@ -273,11 +315,22 @@ public class EditorScene {
             if (!KeyframeTrack.isCameraSwitch(track)) {
                 continue;
             }
+            // Walk the cuts in time order: a cut whose camera has gone takes over from whatever was
+            // live before it, so removing a camera extends its predecessor's span instead of jumping
+            // to an unrelated viewpoint.
+            UUID previous = null;
             for (Map.Entry<Integer, Keyframe> entry : track.keyframesByTick.entrySet()) {
-                if (entry.getValue() instanceof CameraSwitchKeyframe switchKeyframe) {
-                    if (switchKeyframe.cameraId != null && this.cameraById(switchKeyframe.cameraId) == null) {
-                        entry.setValue(new CameraSwitchKeyframe(fallback));
-                    }
+                if (!(entry.getValue() instanceof CameraSwitchKeyframe cut)) {
+                    continue;
+                }
+                if (cut.cameraId != null && this.cameraById(cut.cameraId) != null) {
+                    previous = cut.cameraId;
+                    continue;
+                }
+                UUID replacement = previous != null ? previous : fallback;
+                entry.setValue(new CameraSwitchKeyframe(replacement));
+                if (replacement != null) {
+                    previous = replacement;
                 }
             }
         }

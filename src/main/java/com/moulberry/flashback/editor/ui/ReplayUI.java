@@ -319,6 +319,12 @@ public class ReplayUI {
         builder.addChar('\ue55f');
         builder.addChar('\uea44');
         builder.addChar('\ue3a1');
+        builder.addChar('\ue315'); // keyboard_arrow_right  (collapsed group)
+        builder.addChar('\ue313'); // keyboard_arrow_down   (expanded group)
+        builder.addChar('\ue5d8'); // arrow_upward
+        builder.addChar('\ue5db'); // arrow_downward
+        builder.addChar('\ue7fd'); // person                (spectate)
+        builder.addChar('\ue86c'); // check_circle          (live camera)
         builder.addChar('\ue41a'); // Rotate CW
         builder.addChar('\ue419'); // Rotate CCW
         return builder.buildRanges();

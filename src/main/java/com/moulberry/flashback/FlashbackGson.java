@@ -52,6 +52,8 @@ public class FlashbackGson {
             .registerTypeAdapter(EditorSceneHistoryAction.RemoveTrack.class, new EditorSceneHistoryAction.RemoveTrack.TypeAdapter())
             .registerTypeAdapter(EditorSceneHistoryAction.AddCamera.class, new EditorSceneHistoryAction.AddCamera.TypeAdapter())
             .registerTypeAdapter(EditorSceneHistoryAction.RemoveCamera.class, new EditorSceneHistoryAction.RemoveCamera.TypeAdapter())
+            .registerTypeAdapter(EditorSceneHistoryAction.ReorderCamera.class, new EditorSceneHistoryAction.ReorderCamera.TypeAdapter())
+            .registerTypeAdapter(EditorSceneHistoryAction.RestoreTrack.class, new EditorSceneHistoryAction.RestoreTrack.TypeAdapter())
             .registerTypeAdapter(EditorSceneHistoryAction.class, new EditorSceneHistoryAction.TypeAdapter());
     }
 

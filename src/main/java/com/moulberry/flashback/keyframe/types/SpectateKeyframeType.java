@@ -36,7 +36,7 @@ public class SpectateKeyframeType implements KeyframeType<SpectateKeyframe> {
 
     @Override
     public @Nullable String icon() {
-        return "\ue8f4";
+        return "\ue7fd";
     }
 
     @Override
