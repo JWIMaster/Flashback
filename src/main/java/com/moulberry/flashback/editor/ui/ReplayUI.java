@@ -325,6 +325,7 @@ public class ReplayUI {
         builder.addChar('\ue5db'); // arrow_downward
         builder.addChar('\ue7fd'); // person                (spectate)
         builder.addChar('\ue86c'); // check_circle          (live camera)
+        builder.addChar('\ue14e'); // content_cut           (cut here)
         builder.addChar('\ue41a'); // Rotate CW
         builder.addChar('\ue419'); // Rotate CCW
         return builder.buildRanges();

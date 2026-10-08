@@ -30,8 +30,8 @@ public class Keybinds {
 
     public static final Keybind ADD_CAMERA = new Keybind("add_camera", 0, false, false, false, false);
 
-    public static final Keybind TIMELINE_ZOOM_SCROLL = new Keybind("timeline_zoom_scroll", Keybind.FAKE_SCROLL_KEY, false, false, false, false).withForceScrollKey();
-    public static final Keybind TIMELINE_MOVE_SCROLL = new Keybind("timeline_move_scroll", Keybind.FAKE_SCROLL_KEY, false, true, false, false).withForceScrollKey();
+    public static final Keybind TIMELINE_ZOOM_SCROLL = new Keybind("timeline_zoom_scroll", Keybind.FAKE_SCROLL_KEY, false, true, false, false).withForceScrollKey();
+    public static final Keybind TIMELINE_MOVE_SCROLL = new Keybind("timeline_move_scroll", Keybind.FAKE_SCROLL_KEY, true, false, false, false).withForceScrollKey();
 
     public static final Keybind ROLL_CW = new Keybind("roll_cw", 0, false, false, false, false);
     public static final Keybind ROLL_CCW = new Keybind("roll_ccw", 0, false, false, false, false);
@@ -61,6 +61,23 @@ public class Keybinds {
             if (keybindValue != null) {
                 keybind.loadFromConfigValue(keybindValue);
             }
+        }
+        repairScrollBindings(flashbackConfig);
+    }
+
+    /**
+     * Puts the scroll gestures back when a config has lost them.
+     *
+     * <p>They are modifier-only bindings, and an older writer saved them as plain "none" - which
+     * loads as "no binding", permanently disabling zooming and panning by scroll for that user. The
+     * gesture cannot be expressed as nothing, so nothing is treated as "restore the default".
+     */
+    public static void repairScrollBindings(FlashbackConfigV1 flashbackConfig) {
+        for (Keybind scroll : List.of(TIMELINE_ZOOM_SCROLL, TIMELINE_MOVE_SCROLL)) {
+            if (scroll.getKey() == 0) {
+                scroll.resetToDefaults();
+            }
+            flashbackConfig.keybinds.put(scroll.getDescriptionRaw(), scroll.toConfigValue());
         }
     }
 

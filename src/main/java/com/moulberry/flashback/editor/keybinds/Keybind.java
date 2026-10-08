@@ -32,6 +32,13 @@ public class Keybind implements KeybindInterface {
     private boolean superMod;
     private boolean forceScrollKey = false;
 
+    // What this binding was declared as, so a binding that a config has broken can be put back.
+    private final int defaultKey;
+    private final boolean defaultShiftMod;
+    private final boolean defaultCtrlMod;
+    private final boolean defaultAltMod;
+    private final boolean defaultSuperMod;
+
     private boolean ingameDownLastTime = false;
 
     public Keybind(String description, int key, boolean shiftMod, boolean ctrlMod, boolean altMod, boolean superMod) {
@@ -42,7 +49,34 @@ public class Keybind implements KeybindInterface {
         this.altMod = altMod;
         this.superMod = superMod;
 
+        this.defaultKey = key;
+        this.defaultShiftMod = shiftMod;
+        this.defaultCtrlMod = ctrlMod;
+        this.defaultAltMod = altMod;
+        this.defaultSuperMod = superMod;
+
         Keybinds.updateMapping(this, 0);
+    }
+
+    /**
+     * Whether this binding is a gesture modifier rather than a key.
+     *
+     * <p>The scroll bindings have no key of their own: they exist to say which modifier turns a
+     * scroll into a zoom or a pan, so their modifiers are the whole binding.
+     */
+    public boolean isModifierOnly() {
+        return this.key == FAKE_SCROLL_KEY;
+    }
+
+    /** Restores the modifiers this binding was declared with. */
+    public void resetToDefaults() {
+        int oldKey = this.key;
+        this.key = this.defaultKey;
+        this.shiftMod = this.defaultShiftMod;
+        this.ctrlMod = this.defaultCtrlMod;
+        this.altMod = this.defaultAltMod;
+        this.superMod = this.defaultSuperMod;
+        Keybinds.updateMapping(this, oldKey);
     }
 
     public Keybind withForceScrollKey() {
@@ -99,14 +133,9 @@ public class Keybind implements KeybindInterface {
     }
 
     public String toConfigValue() {
-        if (this.key == 0) {
-            return "none";
-        }
-
-        String key = KeybindHelper.imguiToConfig(this.key);
-        if (key.equals("none")) {
-            return "none";
-        }
+        // A modifier-only binding has no key to write, but its modifiers are the entire binding, so
+        // they have to be written anyway: dropping them loses the gesture on the next load.
+        String key = this.key == 0 ? "none" : KeybindHelper.imguiToConfig(this.key);
 
         StringBuilder builder = new StringBuilder();
         if (this.shiftMod) builder.append("shift+");
@@ -149,7 +178,10 @@ public class Keybind implements KeybindInterface {
                 configValue = configValue.substring(6);
             } else {
                 configValue = configValue.substring(configValue.lastIndexOf("+")+1);
-                int key = KeybindHelper.configToImgui(configValue);
+                // "ctrl+none" is a modifier-only binding: the modifiers are the binding, and there is
+                // deliberately no key.
+                int key = configValue.equals("none") && (shiftMod || ctrlMod || altMod || superMod)
+                    ? FAKE_SCROLL_KEY : KeybindHelper.configToImgui(configValue);
                 if (key != 0) {
                     int oldKey = this.key;
                     this.key = key;

@@ -15,6 +15,7 @@ import net.minecraft.client.resources.language.I18n;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 
@@ -160,6 +161,129 @@ public final class TimelineEdits {
             return;
         }
         pushKeyframe(scene, state, track, index, tick, keyframe);
+    }
+
+    /**
+     * Retimes a cut: the shot before it grows or shrinks, and the shot after does the opposite.
+     *
+     * <p>Moving a boundary is how a shot's length is changed, so it goes through the normal undo
+     * stack like any other edit.
+     */
+    public static void moveCut(EditorScene scene, EditorState state, int fromTick, int toTick) {
+        if (fromTick == toTick) {
+            return;
+        }
+        KeyframeTrack switchTrack = scene.cameraSwitchTrack();
+        if (switchTrack == null) {
+            return;
+        }
+        Keyframe existing = switchTrack.keyframesByTick.get(fromTick);
+        if (!(existing instanceof CameraSwitchKeyframe cut)) {
+            return;
+        }
+        int index = scene.trackIndexOf(switchTrack);
+        if (index < 0) {
+            return;
+        }
+
+        Keyframe displaced = switchTrack.keyframesByTick.get(toTick);
+        List<EditorSceneHistoryAction> undo = new ArrayList<>();
+        List<EditorSceneHistoryAction> redo = new ArrayList<>();
+        if (displaced != null) {
+            undo.add(new EditorSceneHistoryAction.SetKeyframe(switchTrack.keyframeType, index, toTick, displaced.copy()));
+        } else {
+            undo.add(new EditorSceneHistoryAction.RemoveKeyframe(switchTrack.keyframeType, index, toTick));
+        }
+        undo.add(new EditorSceneHistoryAction.SetKeyframe(switchTrack.keyframeType, index, fromTick, cut.copy()));
+        redo.add(new EditorSceneHistoryAction.RemoveKeyframe(switchTrack.keyframeType, index, fromTick));
+        redo.add(new EditorSceneHistoryAction.SetKeyframe(switchTrack.keyframeType, index, toTick, cut.copy()));
+        push(scene, state, undo, redo, I18n.get("flashback.timeline.moved_cut"));
+    }
+
+    /**
+     * Slides a shot in time: both of its boundaries move by the same amount, so its length is
+     * unchanged and its neighbours take up the difference. A shot that starts the replay has no
+     * starting boundary, so only its end moves and it changes length instead.
+     */
+    public static void slideShot(EditorScene scene, EditorState state, int startTick, int endTick, int delta) {
+        if (delta == 0) {
+            return;
+        }
+        KeyframeTrack switchTrack = scene.cameraSwitchTrack();
+        if (switchTrack == null) {
+            return;
+        }
+        List<Integer> boundaries = new ArrayList<>();
+        if (startTick > 0 && switchTrack.keyframesByTick.get(startTick) instanceof CameraSwitchKeyframe) {
+            boundaries.add(startTick);
+        }
+        if (switchTrack.keyframesByTick.get(endTick) instanceof CameraSwitchKeyframe) {
+            boundaries.add(endTick);
+        }
+        if (boundaries.isEmpty()) {
+            return;
+        }
+
+        int index = scene.trackIndexOf(switchTrack);
+        if (index < 0) {
+            return;
+        }
+        List<EditorSceneHistoryAction> undo = new ArrayList<>();
+        List<EditorSceneHistoryAction> redo = new ArrayList<>();
+        // Move the boundary nearest the end of the replay first, so the two never collide on the way.
+        List<Integer> ordered = new ArrayList<>(boundaries);
+        ordered.sort(Comparator.comparingInt(tick -> delta > 0 ? -tick : tick));
+        for (int tick : ordered) {
+            Keyframe cut = switchTrack.keyframesByTick.get(tick);
+            int target = tick + delta;
+            Keyframe displaced = switchTrack.keyframesByTick.get(target);
+            if (displaced != null && !boundaries.contains(target)) {
+                undo.add(new EditorSceneHistoryAction.SetKeyframe(switchTrack.keyframeType, index, target, displaced.copy()));
+            } else {
+                undo.add(new EditorSceneHistoryAction.RemoveKeyframe(switchTrack.keyframeType, index, target));
+            }
+            undo.add(new EditorSceneHistoryAction.SetKeyframe(switchTrack.keyframeType, index, tick, cut.copy()));
+            redo.add(new EditorSceneHistoryAction.RemoveKeyframe(switchTrack.keyframeType, index, tick));
+            redo.add(new EditorSceneHistoryAction.SetKeyframe(switchTrack.keyframeType, index, target, cut.copy()));
+        }
+        push(scene, state, undo, redo, I18n.get("flashback.timeline.slid_shot"));
+    }
+
+    /** Removes a shot from the programme by deleting the cut that starts it. */
+    public static void deleteShot(EditorScene scene, EditorState state, int cutTick) {
+        KeyframeTrack switchTrack = scene.cameraSwitchTrack();
+        if (switchTrack == null || !(switchTrack.keyframesByTick.get(cutTick) instanceof CameraSwitchKeyframe)) {
+            return;
+        }
+        int index = scene.trackIndexOf(switchTrack);
+        if (index >= 0) {
+            pushKeyframeRemoval(scene, state, switchTrack, index, cutTick);
+        }
+    }
+
+    /** Retargets the shot that starts at {@code cutTick} to a different camera, creating the cut if needed. */
+    public static void cutShotToCamera(EditorScene scene, EditorState state, int cutTick, EditorCamera camera) {
+        KeyframeTrack switchTrack = scene.findOrCreateCameraSwitchTrack();
+        Keyframe existing = switchTrack.keyframesByTick.get(cutTick);
+        if (existing instanceof CameraSwitchKeyframe cut && camera.id.equals(cut.cameraId)) {
+            return;
+        }
+        int index = scene.trackIndexOf(switchTrack);
+        if (index < 0) {
+            return;
+        }
+        pushKeyframe(scene, state, switchTrack, index, cutTick, new CameraSwitchKeyframe(camera.id));
+    }
+
+    private static void pushKeyframeRemoval(EditorScene scene, EditorState state, KeyframeTrack track, int index, int tick) {
+        Keyframe existing = track.keyframesByTick.get(tick);
+        if (existing == null) {
+            return;
+        }
+        push(scene, state,
+            List.of(new EditorSceneHistoryAction.SetKeyframe(track.keyframeType, index, tick, existing.copy())),
+            List.of(new EditorSceneHistoryAction.RemoveKeyframe(track.keyframeType, index, tick)),
+            I18n.get("flashback.removed_named_keyframe", track.keyframeType.name()));
     }
 
     private static void pushKeyframe(EditorScene scene, EditorState state, KeyframeTrack track, int index, int tick, Keyframe keyframe) {

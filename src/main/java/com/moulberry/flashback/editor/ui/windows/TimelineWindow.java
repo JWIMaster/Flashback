@@ -37,6 +37,7 @@ import com.moulberry.flashback.state.KeyframeTrack;
 import com.moulberry.flashback.utils.InputHelper;
 import imgui.moulberry90.ImDrawList;
 import imgui.moulberry90.ImGui;
+import imgui.moulberry90.ImGuiIO;
 import imgui.moulberry90.ImVec4;
 import imgui.moulberry90.flag.ImGuiCol;
 import imgui.moulberry90.flag.ImGuiComboFlags;
@@ -121,6 +122,36 @@ public class TimelineWindow {
     private static KeyframeTrack pendingCutMenuTrack;
     private static int pendingCutMenuTick;
     private static boolean openCutMenuNow;
+    private static int editingTotalTicks;
+    private static int currentCursorTick;
+    private static int exportStartTick = -1;
+    private static int exportEndTick = -1;
+    private static int selectedShotStart = -1;
+    private static EditorScene.Shot pendingShotMenu;
+    /**
+     * The shot the menu is about, kept for as long as the menu is open.
+     *
+     * <p>ImGui closes a popup that is not begun in a frame, so the menu has to be begun every frame
+     * it is up - remembering what it refers to is what makes that possible.
+     */
+    private static EditorScene.Shot menuShot;
+    private static int menuTick;
+    /** Whether the shot menu was open last frame, so a tooltip cannot cover it. */
+    private static boolean shotMenuShowing;
+    /** The tick a cut was requested for, or -1 when the menu is editing an existing shot. */
+    private static int menuStartTick = -1;
+    /**
+     * How far the row list is scrolled.
+     *
+     * <p>Read back from the list itself each frame and used for the layout, because the offset has to
+     * be known before the list is begun - hit-testing happens first, and a click has to land on the
+     * row that is drawn under it.
+     */
+    private static double rowScroll;
+    /** The scroll range this frame, filled in when the frame is built. */
+    private static double rowScrollMax;
+    /** Where the scrollbar thumb was grabbed, so dragging it does not make it jump. */
+    private static float rowScrollbarGrab;
     private static int pendingCreateRow = -1;
     private static int pendingCreateTick;
     @Nullable
@@ -190,13 +221,14 @@ public class TimelineWindow {
         final float x, y, width, height;
         final float leftWidth, rulerHeight;
         final float minorSeparatorHeight, timestampHeight;
-        final float uiScale;
+        final float uiScale, footerHeight;
         final float keyframeSize, rowHeight, sectionHeight, cutsLaneHeight, buttonSize, indentWidth;
         final float contentY;
         final boolean showScrollbar;
 
         final float mouseX, mouseY;
-        final boolean mouseInLeft, mouseInTimeline, mouseInRows, mouseInRuler;
+        final boolean mouseInLeft, mouseInTimeline, mouseInRows, mouseInRuler, mouseOverTimeline,
+            mouseOverRows, mouseOverWindow;
 
         final TickScale scale;
         final int cursorTicks, currentReplayTick, totalTicks;
@@ -220,7 +252,7 @@ public class TimelineWindow {
         Frame(ReplayServer replayServer, FlashbackMeta metadata, EditorState state, EditorScene scene,
               TimelineLayout layout, float x, float y, float width, float height, float leftWidth,
               float rulerHeight, float minorSeparatorHeight, float timestampHeight,
-              float uiScale, float keyframeSize, float rowHeight, float sectionHeight, float cutsLaneHeight,
+              float uiScale, float footerHeight, float keyframeSize, float rowHeight, float sectionHeight, float cutsLaneHeight,
               float buttonSize, float indentWidth, float contentY,
               boolean showScrollbar, float mouseX, float mouseY, TickScale scale, int cursorTicks, int currentReplayTick,
               int totalTicks, int minTicks, float availableTicks, float timelineWidth, float timelineLeftOffset,
@@ -243,6 +275,7 @@ public class TimelineWindow {
             this.minorSeparatorHeight = minorSeparatorHeight;
             this.timestampHeight = timestampHeight;
             this.uiScale = uiScale;
+            this.footerHeight = footerHeight;
             this.keyframeSize = keyframeSize;
             this.rowHeight = rowHeight;
             this.sectionHeight = sectionHeight;
@@ -283,6 +316,12 @@ public class TimelineWindow {
 
             this.mouseInLeft = mouseX >= x && mouseX < x + leftWidth;
             this.mouseInTimeline = mouseX >= x + leftWidth && mouseX <= x + width;
+            this.mouseOverTimeline = mouseX >= x && mouseX <= x + width
+                && mouseY >= y + rulerHeight && mouseY <= y + height - zoomBarHeight;
+            this.mouseOverRows = mouseX >= x && mouseX <= x + width
+                && mouseY >= y + rulerHeight && mouseY < y + height - footerHeight;
+            this.mouseOverWindow = mouseX >= x && mouseX <= x + width
+                && mouseY >= y && mouseY <= y + height;
             this.mouseInRows = mouseY > y + rulerHeight && mouseY < y + height;
             this.mouseInRuler = mouseY >= y && mouseY <= y + rulerHeight && mouseX >= x + leftWidth;
         }
@@ -361,12 +400,15 @@ public class TimelineWindow {
             final int tick;
             final float anchorX, anchorY;
             boolean moved;
+            /** Where this cut would land this frame, filled in by the frame builder. */
+            int previewTick;
 
             Keys(KeyframeTrack track, int tick, float anchorX, float anchorY) {
                 this.track = track;
                 this.tick = tick;
                 this.anchorX = anchorX;
                 this.anchorY = anchorY;
+                this.previewTick = tick;
             }
         }
 
@@ -414,6 +456,35 @@ public class TimelineWindow {
 
         /** Resizing the row list. */
         final class Splitter implements Drag {}
+
+        /** Moving one boundary of a shot, which retimes where the cut happens. */
+        static final class CutEdge implements Drag {
+            final int cutTick;
+            final int grabOffset;
+            int target = -1;
+
+            CutEdge(int cutTick, int grabOffset) {
+                this.cutTick = cutTick;
+                this.grabOffset = grabOffset;
+            }
+        }
+
+        /** Sliding a whole shot: both of its boundaries move together, its neighbours stretch. */
+        static final class ShotBody implements Drag {
+            final int startTick;
+            final int endTick;
+            final int anchorTick;
+            /** How far the pointer was from the boundary it grabbed, so the shot does not jump. */
+            final int grabOffset;
+            int delta = 0;
+
+            ShotBody(int startTick, int endTick, int anchorTick, int grabOffset) {
+                this.startTick = startTick;
+                this.endTick = endTick;
+                this.anchorTick = anchorTick;
+                this.grabOffset = grabOffset;
+            }
+        }
 
         /** Rubber-band selecting keyframes. */
         final class Marquee implements Drag {
@@ -510,7 +581,7 @@ public class TimelineWindow {
         float cutsLaneHeight = Math.max(rowHeight + ReplayUI.scaleUi(9), ReplayUI.scaleUi(32));
         float keyframeSize = ReplayUI.scaleUi(9);
         float buttonSize = ImGui.getTextLineHeight();
-        float indentWidth = ReplayUI.scaleUi(14);
+        float indentWidth = ReplayUI.scaleUi(20);
 
         // The row list is as wide as the user last made it, within limits that keep the timeline
         // usable on any window: never less than a readable column, never more than most of the view.
@@ -519,11 +590,14 @@ public class TimelineWindow {
 
         TimelineLayout layout = TimelineLayout.build(scene, new TimelineLayout.Metrics(
             rowHeight, sectionHeight, cutsLaneHeight, ReplayUI.scaleUi(6)));
+
+        float footerHeight = ImGui.getFrameHeight() + ReplayUI.scaleUi(8);
         float scrollbar = ImGui.getStyle().getScrollbarSize() - 1;
-        boolean showScrollbar = layout.bottom(0) + rulerHeight > height;
-        if (showScrollbar) {
-            width -= scrollbar;
-        }
+        float rowsHeight = Math.max(40, height - rulerHeight - footerHeight);
+        float contentHeight = layout.bottom(0) + ReplayUI.scaleUi(6);
+        boolean showScrollbar = contentHeight > rowsHeight;
+        float maxScroll = Math.max(0, contentHeight - rowsHeight);
+        rowScroll = Math.max(0, Math.min(maxScroll, rowScroll));
 
         float mouseX = ReplayUI.getIO().getMousePosX();
         float mouseY = ReplayUI.getIO().getMousePosY();
@@ -581,6 +655,14 @@ public class TimelineWindow {
             cursorTicks = Math.max(0, cursorTicks - pendingStepBackwardsTicks);
         }
 
+        // The magnet and the shot hit-testing need a few facts about this frame; keeping them in one
+        // place is what lets every drag snap to the same things.
+        rowScrollMax = maxScroll;
+        editingTotalTicks = totalTicks;
+        currentCursorTick = cursorTicks;
+        exportStartTick = scene.exportStartTicks;
+        exportEndTick = scene.exportEndTicks;
+
         // -- Transport controls --
         float controlSize = ReplayUI.scaleUi(24);
         float controlsY = y + rulerHeight / 2 - controlSize / 2;
@@ -601,54 +683,77 @@ public class TimelineWindow {
             zoomBarExpanded = true;
         }
 
-        float contentY = y + rulerHeight - ImGui.getScrollY();
+        float contentY = y + rulerHeight - (float) rowScroll;
 
         // -- The switch lane's spans: computed once so drawing and hit-testing share them --
+        // While a boundary or a whole shot is being dragged, the lane is drawn as it would look if
+        // the drag were committed, so the edit is visible before it is made.
+        Drag.Keys draggedKeys = drag instanceof Drag.Keys keys && KeyframeTrack.isCameraSwitch(keys.track) ? keys : null;
+        Drag.CutEdge draggedEdge = drag instanceof Drag.CutEdge edge ? edge : null;
+        Drag.ShotBody draggedBody = drag instanceof Drag.ShotBody body ? body : null;
+        KeyframeTrack switchTrack = scene.cameraSwitchTrack();
+        boolean cutsLaneEnabled = switchTrack != null && switchTrack.enabled;
+
+        if (draggedKeys != null) {
+            draggedKeys.previewTick = clampTick(draggedKeys.tick + snappedDelta(scale, mouseX, draggedKeys.tick, switchTrack));
+        }
+        if (draggedEdge != null) {
+            int wanted = scale.tickAtX(mouseX) - draggedEdge.grabOffset;
+            draggedEdge.target = snapDragTick(scale, switchTrack, wanted, draggedEdge.cutTick);
+        }
+        if (draggedBody != null) {
+            int anchorTarget = scale.tickAtX(mouseX) - draggedBody.grabOffset;
+            int want = snapDragTick(scale, switchTrack, anchorTarget, draggedBody.anchorTick) - draggedBody.anchorTick;
+            // The shot may not be pushed past either end of the replay.
+            int lowest = -draggedBody.startTick;
+            int highest = totalTicks - draggedBody.endTick;
+            if (draggedBody.startTick == 0) {
+                // A shot that starts the replay has no boundary to move, so it can only grow.
+                lowest = 0;
+            }
+            draggedBody.delta = Math.max(lowest, Math.min(highest, want));
+        }
+
+        EditorScene.CutRetime retime = null;
+        if (draggedKeys != null) {
+            retime = tick -> draggedKeys.tick == tick ? draggedKeys.previewTick : tick;
+        } else if (draggedEdge != null) {
+            retime = tick -> draggedEdge.cutTick == tick ? draggedEdge.target : tick;
+        } else if (draggedBody != null) {
+            retime = tick -> draggedBody.startTick == tick || draggedBody.endTick == tick
+                ? tick + draggedBody.delta : tick;
+        }
+
         List<SwitchSegment> segments = new ArrayList<>();
         List<SwitchCut> cuts = new ArrayList<>();
-        KeyframeTrack switchTrack = scene.cameraSwitchTrack();
-        boolean switchLaneEnabled = switchTrack != null && switchTrack.enabled;
-        // While a cut is being dragged it is drawn at the tick it would land on, so the band follows
-        // the pointer instead of snapping into place only on release.
-        Drag.Keys draggedKeys = drag instanceof Drag.Keys keys && KeyframeTrack.isCameraSwitch(keys.track) ? keys : null;
-        int draggedCutTick = draggedKeys == null ? -1
-            : Math.max(0, Math.min(totalTicks, draggedKeys.tick + snappedDelta(scale, mouseX, draggedKeys.tick, draggedKeys.track)));
-        if (switchTrack != null) {
+        if (switchTrack != null && !scene.cameras.isEmpty()) {
+            for (EditorScene.Shot shot : scene.shots(totalTicks, retime)) {
+                segments.add(new SwitchSegment(shot.startTick(), shot.endTick(), shot.camera(),
+                    scene.cameraIndexOf(shot.camera())));
+            }
             for (Map.Entry<Integer, Keyframe> entry : switchTrack.keyframesByTick.entrySet()) {
-                if (entry.getValue() instanceof CameraSwitchKeyframe cut) {
-                    EditorCamera camera = scene.resolveCamera(cut.cameraId);
-                    if (camera != null) {
-                        int cutTick = draggedKeys != null && entry.getKey() == draggedKeys.tick ? draggedCutTick : entry.getKey();
-                        cuts.add(new SwitchCut(cutTick, camera, scene.cameraIndexOf(camera)));
-                    }
+                if (!(entry.getValue() instanceof CameraSwitchKeyframe cut)) {
+                    continue;
                 }
+                EditorCamera camera = scene.resolveCamera(cut.cameraId);
+                if (camera == null) {
+                    continue;
+                }
+                int cutTick = retime == null ? entry.getKey() : retime.retime(entry.getKey());
+                cuts.add(new SwitchCut(Math.max(0, Math.min(totalTicks, cutTick)), camera,
+                    scene.cameraIndexOf(camera)));
             }
-            if (switchLaneEnabled && !scene.cameras.isEmpty()) {
-                int from = 0;
-                for (SwitchCut cut : cuts) {
-                    if (cut.tick() > from) {
-                        EditorCamera camera = scene.resolveCameraAt(from);
-                        if (camera != null) {
-                            segments.add(new SwitchSegment(from, cut.tick(), camera, scene.cameraIndexOf(camera)));
-                        }
-                    }
-                    from = Math.max(from, cut.tick());
-                }
-                if (from < totalTicks) {
-                    EditorCamera camera = cuts.isEmpty() ? scene.cameras.get(0) : cuts.get(cuts.size() - 1).camera();
-                    segments.add(new SwitchSegment(from, totalTicks, camera, scene.cameraIndexOf(camera)));
-                }
-            }
+            cuts.sort(java.util.Comparator.comparingInt(SwitchCut::tick));
         }
 
         return new Frame(replayServer, metadata, editorState, scene, layout, x, y, width, height, leftWidth,
-            rulerHeight, minorSeparatorHeight, timestampHeight, uiScale, keyframeSize, rowHeight,
+            rulerHeight, minorSeparatorHeight, timestampHeight, uiScale, footerHeight, keyframeSize, rowHeight,
             sectionHeight, cutsLaneHeight,
             buttonSize, indentWidth, contentY, showScrollbar, mouseX, mouseY, scale, cursorTicks, currentReplayTick,
             totalTicks, minTicks, availableTicks, timelineWidth, timelineLeftOffset, minorsPerMajor, ticksPerMinor,
             showSubSeconds, minorSeparatorWidth, errorOffset, zoomBarHeight, zoomBarMin, zoomBarMax, zoomBarExpanded,
             controlSize, controlsY, skipBackwardsX, slowDownX, pauseX, fastForwardsX, skipForwardsX,
-            segments, cuts, switchLaneEnabled);
+            segments, cuts, cutsLaneEnabled);
     }
 
     // -- Drawing ---------------------------------------------------------------------------------
@@ -669,26 +774,83 @@ public class TimelineWindow {
     }
 
     private static void drawScrollableArea(Frame f) {
-        int flags = ImGuiWindowFlags.NoScrollWithMouse;
-        flags |= f.showScrollbar ? ImGuiWindowFlags.AlwaysVerticalScrollbar : ImGuiWindowFlags.NoScrollbar;
+        // The list is positioned by our own scroll offset rather than ImGui's, because ImGui hides
+        // the wheel it consumes, which would leave nothing for zooming and panning to read.
+        int flags = ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse;
 
-        ImGui.beginChild("##TimelineRows", 0, 0, false, flags);
+        // The list ends above the footer rather than under it, so a row is never half covered.
+        ImGui.beginChild("##TimelineRows", 0, Math.max(40, f.height - f.rulerHeight - f.footerHeight),
+            false, flags);
         try {
             ImDrawList drawList = ImGui.getWindowDrawList();
+            drawTreeGuides(f, drawList);
             drawLeftPanel(f, drawList);
 
             // Drawn before the canvas clip so the marker is visible in both panels.
             drawInsertionIndicator(f, drawList);
             drawEmptyState(f, drawList);
 
-            drawList.pushClipRect(f.timelineLeft() + 1, f.y + f.rulerHeight, f.timelineRight(), f.y + f.height, true);
+            drawList.pushClipRect(f.timelineLeft() + 1, f.y + f.rulerHeight, f.timelineRight(),
+                f.y + f.height - f.footerHeight, true);
             drawSwitchBand(f, drawList);
             drawKeyframeRows(f, drawList);
             drawMarquee(f, drawList);
             drawList.popClipRect();
+
+            // Room to scroll past the last row, so it never ends up half under the footer.
+            ImGui.setCursorScreenPos(f.x, f.layout.bottom(f.contentY));
+            ImGui.dummy(1, f.footerHeight + 4);
+
+
         } finally {
             ImGui.endChild();
         }
+        // Outside the scrolling child, so the controls are always reachable however long the list is.
+        drawFooter(f);
+    }
+
+    /**
+     * The tree lines that show which tracks belong to which camera.
+     *
+     * <p>A camera and its tracks are otherwise told apart only by a tint, which is not something you
+     * can read at a glance; a guide line says it plainly.
+     */
+    private static void drawTreeGuides(Frame f, ImDrawList drawList) {
+        TimelineRow.CameraGroup open = null;
+        float guideX = 0;
+        for (int i = 0; i < f.layout.size(); i++) {
+            TimelineRow row = f.layout.row(i);
+            if (row instanceof TimelineRow.CameraGroup group) {
+                if (open != null) {
+                    drawGuide(drawList, f, open, i - 1, guideX);
+                }
+                open = group.camera().collapsed ? null : group;
+                guideX = f.x + 8 + f.buttonSize / 2;
+            } else if (open != null && !(row instanceof TimelineRow.Track track && track.owner() == open.camera())) {
+                drawGuide(drawList, f, open, i - 1, guideX);
+                open = null;
+            }
+        }
+        if (open != null) {
+            drawGuide(drawList, f, open, f.layout.size() - 1, guideX);
+        }
+    }
+
+    private static void drawGuide(ImDrawList drawList, Frame f, TimelineRow.CameraGroup group, int lastRow, float x) {
+        int first = f.layout.rowOfTrack(null);
+        int groupRow = -1;
+        for (int i = 0; i < f.layout.size(); i++) {
+            if (f.layout.row(i) == group) {
+                groupRow = i;
+                break;
+            }
+        }
+        if (groupRow < 0 || lastRow <= groupRow) {
+            return;
+        }
+        int accent = TimelineColours.cameraAccent(f.scene.cameraIndexOf(group.camera()));
+        drawList.addLine(x, f.rowBottom(groupRow) - 2, x, f.rowBottom(lastRow) - 4,
+            TimelineColours.alpha(accent, 0x70), 1f);
     }
 
     /** A hint in the canvas when there is nothing on the timeline yet. */
@@ -749,8 +911,53 @@ public class TimelineWindow {
 
         applyEnablePaint(f);
         applyRowAction(f, action);
+        drawRowScrollbar(f, drawList);
         drawSplitterHandle(f, drawList);
         drawFooter(f);
+    }
+
+    /**
+     * The row list's scrollbar, next to the rows it scrolls rather than at the far edge of the window.
+     *
+     * <p>It is drawn and dragged by hand because the list's scroll offset is ours: ImGui's own
+     * scrollbar would move the list without the timeline noticing.
+     */
+    private static void drawRowScrollbar(Frame f, ImDrawList drawList) {
+        if (!f.showScrollbar || rowScrollMax <= 0) {
+            return;
+        }
+        float top = f.y + f.rulerHeight;
+        float bottom = f.y + f.height - f.footerHeight;
+        float trackHeight = bottom - top;
+        if (trackHeight <= 8) {
+            return;
+        }
+
+        float viewHeight = trackHeight;
+        float contentHeight = (float) rowScrollMax + viewHeight;
+        float thumbHeight = Math.max(ReplayUI.scaleUi(24), trackHeight * (viewHeight / contentHeight));
+        float travel = Math.max(1, trackHeight - thumbHeight);
+        float thumbY = top + (float) (travel * (rowScroll / rowScrollMax));
+        float x0 = f.x + f.leftWidth - 5;
+        float x1 = f.x + f.leftWidth - 1;
+
+        ImGui.setCursorScreenPos(x0 - 2, top);
+        ImGui.invisibleButton("##rowsScrollbar", (x1 - x0) + 3, trackHeight);
+        if (ImGui.isItemActivated()) {
+            // Grabbing the thumb keeps the pointer where it was; grabbing the track centres it.
+            rowScrollbarGrab = f.mouseY >= thumbY && f.mouseY <= thumbY + thumbHeight
+                ? f.mouseY - thumbY : thumbHeight / 2;
+        }
+        if (ImGui.isItemActive()) {
+            double wanted = (f.mouseY - top - rowScrollbarGrab) / travel * rowScrollMax;
+            rowScroll = Math.max(0, Math.min(rowScrollMax, wanted));
+            ImGui.setMouseCursor(ImGuiMouseCursor.Hand);
+        }
+
+        boolean active = ImGui.isItemHovered() || ImGui.isItemActive();
+        drawList.addRectFilled(x0, top, x1, bottom, TimelineColours.ROW_DIVIDER, 3f);
+        drawList.addRectFilled(x0, thumbY, x1, Math.min(bottom, thumbY + thumbHeight),
+            active ? 0xB0FFFFFF : 0x70FFFFFF, 3f);
     }
 
     private static void drawRowBackground(Frame f, ImDrawList drawList, int rowIndex, TimelineRow row, boolean hovered) {
@@ -805,8 +1012,34 @@ public class TimelineWindow {
         };
         float top = f.rowTop(rowIndex);
         float height = f.layout.rowHeight(rowIndex);
-        ImGui.setCursorScreenPos(f.x + 10, top + height / 2 - ImGui.getTextLineHeight() / 2f);
-        ImGui.textColored(TimelineColours.SECTION_TEXT, label);
+        float y = top + height / 2 - ImGui.getTextLineHeight() / 2f;
+
+        if (section.kind() != TimelineRow.Section.Kind.CAMERAS || f.scene.cameras.isEmpty()) {
+            ImGui.setCursorScreenPos(f.x + 10, y);
+            ImGui.textColored(TimelineColours.SECTION_TEXT, label);
+            return null;
+        }
+
+        // The heading doubles as collapse-all: with a lot of cameras, folding them all away is the
+        // difference between seeing the whole edit and seeing three rows of it.
+        boolean anyExpanded = f.scene.cameras.stream().anyMatch(camera -> !camera.collapsed);
+        ImGui.setCursorScreenPos(f.x + 6, top + 1);
+        if (ImGui.invisibleButton("##collapseAll", ImGui.getTextLineHeight() + 4, height - 2)) {
+            for (EditorCamera camera : f.scene.cameras) {
+                camera.collapsed = anyExpanded;
+            }
+            if (anyExpanded) {
+                SELECTION.clear();
+                inspectorOpen = false;
+            }
+            editorState.markDirty();
+        }
+        boolean hovered = ImGui.isItemHovered();
+        ImGui.getWindowDrawList().addText(f.x + 10, y,
+            hovered ? TimelineColours.TEXT : TimelineColours.SECTION_TEXT,
+            (anyExpanded ? "\ue313  " : "\ue315  ") + label);
+        ImGuiHelper.tooltip(I18n.get(anyExpanded ? "flashback.timeline.collapse_all"
+            : "flashback.timeline.expand_all"));
         return null;
     }
 
@@ -837,7 +1070,11 @@ public class TimelineWindow {
         // The name is clipped so a long one cannot run underneath the buttons.
         float buttonsX = f.x + f.leftWidth - ROW_BUTTON_MARGIN - rowButtonsWidth(f, 1);
         float nameRight = buttonsX - 6;
-        String kindIcon = camera.kind == EditorCamera.Kind.SPECTATE ? "\ue7fd " : "\ue04b ";
+        String kindIcon = switch (camera.kind) {
+            case FREE -> "\ue04b ";
+            case SPECTATE -> "\ue7fd ";
+            case ORBIT -> "\ue577 ";
+        };
         ImGui.setCursorScreenPos(cursorX, top + f.layout.rowHeight(rowIndex) / 2 - ImGui.getTextLineHeight() / 2f);
         ImDrawList drawList = ImGui.getWindowDrawList();
         drawList.pushClipRect(cursorX - 2, top, Math.max(cursorX, nameRight), bottom, true);
@@ -944,7 +1181,7 @@ public class TimelineWindow {
             }
             ImGui.popStyleVar();
         } else {
-            float nameRight = f.x + f.leftWidth - ROW_BUTTON_MARGIN - rowButtonsWidth(f, cutsLane ? 2 : 3) - 6;
+            float nameRight = f.x + f.leftWidth - ROW_BUTTON_MARGIN - rowButtonsWidth(f, 3) - 6;
             String label = (icon != null ? icon + " " : "") + name;
             ImGui.setCursorScreenPos(cursorX, top + height / 2 - ImGui.getTextLineHeight() / 2f);
             ImDrawList drawList = ImGui.getWindowDrawList();
@@ -964,21 +1201,29 @@ public class TimelineWindow {
             ImGuiHelper.tooltip(I18n.get(cutsLane ? "flashback.timeline.switch_hint" : "flashback.timeline.rename_hint"));
         }
 
-        float buttonsX = f.x + f.leftWidth - ROW_BUTTON_MARGIN - rowButtonsWidth(f, cutsLane ? 2 : 3);
+        float buttonsX = f.x + f.leftWidth - ROW_BUTTON_MARGIN - rowButtonsWidth(f, 3);
         ImGui.setCursorScreenPos(buttonsX, buttonY);
 
-        // One control means one thing everywhere: this inserts a keyframe, at the playhead, on this
-        // lane - and it is drawn as a keyframe so it matches the thing it makes.
-        if (!cutsLane) {
-            if (ImGui.invisibleButton("##insertKey", f.buttonSize, f.buttonSize)) {
+        // One control in one place on every lane: it inserts this lane's item at the playhead. On a
+        // camera lane that means asking which camera should be live from here, which is the reliable
+        // way to cut - the band is for adjusting shots that already exist.
+        if (ImGui.invisibleButton("##insertKey", f.buttonSize, f.buttonSize)) {
+            if (cutsLane) {
+                requestCutMenu(f.cursorTicks);
+            } else {
                 action = new RowAction.CreateKeyframe(track, f.cursorTicks);
             }
+        }
+        if (cutsLane) {
+            ImGui.getWindowDrawList().addText(ImGui.getItemRectMinX() + 1, ImGui.getItemRectMinY(),
+                track.enabled ? TimelineColours.TEXT : TimelineColours.TEXT_DIM, "\ue14e");
+        } else {
             drawKeyframeButton(ImGui.getWindowDrawList(), ImGui.getItemRectMinX(), ImGui.getItemRectMinY(),
                 f.buttonSize, track.enabled ? TimelineColours.TEXT : TimelineColours.TEXT_DIM);
-            ImGuiHelper.tooltip(I18n.get("flashback.timeline.insert_keyframe_at",
-                ticksToTimestamp(f.cursorTicks), f.cursorTicks));
-            ImGui.sameLine();
         }
+        ImGuiHelper.tooltip(I18n.get(cutsLane ? "flashback.timeline.cut_playhead_hint"
+            : "flashback.timeline.insert_keyframe_at", ticksToTimestamp(f.cursorTicks), f.cursorTicks));
+        ImGui.sameLine();
 
         if (ImGui.invisibleButton("##enable", f.buttonSize, f.buttonSize)) {
             track.enabled = !track.enabled;
@@ -1193,8 +1438,13 @@ public class TimelineWindow {
     }
 
     private static void drawFooter(Frame f) {
-        // Rows position themselves explicitly, so the cursor is not automatically past the last one.
-        ImGui.setCursorScreenPos(f.x + 8, f.layout.bottom(f.contentY) + 2);
+        // Pinned to the bottom of the window rather than the end of the list, on its own bar so the
+        // rows scrolled underneath it do not show through.
+        float top = f.y + f.height - f.footerHeight;
+        ImGui.getWindowDrawList().addRectFilled(f.x, top, f.x + f.width, f.y + f.height,
+            ImGui.getColorU32(ImGuiCol.WindowBg));
+        ImGui.getWindowDrawList().addLine(f.x, top, f.x + f.width, top, TimelineColours.PANEL_DIVIDER);
+        ImGui.setCursorScreenPos(f.x + 8, top + 3);
         if (ImGui.smallButton(I18n.get("flashback.add_element") + "##AddElement")) {
             ImGui.openPopup("##AddElement");
         }
@@ -1207,7 +1457,12 @@ public class TimelineWindow {
                 TimelineEdits.addCamera(scene, editorState, EditorCamera.Kind.FREE, f.cursorTicks);
                 ImGui.closeCurrentPopup();
             }
-            if (ImGui.menuItem("\ue8f4 " + I18n.get("flashback.new_spectate_camera") + "##addSpectateCamera")) {
+            if (ImGui.menuItem("\ue577 " + I18n.get("flashback.new_orbit_camera") + "##addOrbitCamera")) {
+                upgradeToWrite();
+                TimelineEdits.addCamera(scene, editorState, EditorCamera.Kind.ORBIT, f.cursorTicks);
+                ImGui.closeCurrentPopup();
+            }
+            if (ImGui.menuItem("\ue7fd " + I18n.get("flashback.new_spectate_camera") + "##addSpectateCamera")) {
                 upgradeToWrite();
                 TimelineEdits.addCamera(scene, editorState, EditorCamera.Kind.SPECTATE, f.cursorTicks);
                 ImGui.closeCurrentPopup();
@@ -1370,6 +1625,14 @@ public class TimelineWindow {
      * camera menu for that moment, clicking a flag selects the cut, and dragging a flag retimes it -
      * one place, one set of gestures, rather than a button somewhere else that does the same job.
      */
+    /**
+     * The programme lane, drawn as shots: contiguous blocks, each in its camera's colour, with a
+     * boundary mark where one shot gives way to the next.
+     *
+     * <p>Everything about how it looks says what it does - a block is a stretch of time that belongs
+     * to a camera, the highlighted edge is the one you can move, and the white outline is the shot
+     * the inspector is describing.
+     */
     private static void drawSwitchBand(Frame f, ImDrawList drawList) {
         KeyframeTrack cutsLane = f.scene.cameraSwitchTrack();
         if (cutsLane == null) {
@@ -1385,8 +1648,20 @@ public class TimelineWindow {
         float left = f.timelineLeft() + 1;
         float right = f.timelineRight();
 
-        SwitchSegment hoveredSegment = f.mouseOverCutsLane() ? segmentAt(f, f.tickAtX(f.mouseX)) : null;
-        int hoveredCut = f.mouseOverCutsLane() ? cutAt(f, cutsLane) : -1;
+        ShotHit hover = f.mouseOverCutsLane() && !(drag instanceof Drag.CutEdge) && !(drag instanceof Drag.ShotBody)
+            ? shotHitTest(f, cutsLane) : null;
+        boolean laneUsable = f.cutsLaneEnabled && !f.scene.cameras.isEmpty();
+
+        if (f.scene.cameras.isEmpty()) {
+            drawList.addRectFilled(left, top + 3, right, bottom - 3, TimelineColours.CUTS_LANE_BACKGROUND);
+            String hint = I18n.get("flashback.timeline.no_cameras");
+            float width = ImGuiHelper.calcTextWidth(hint);
+            if (right - left > width + 16) {
+                drawList.addText(left + (right - left - width) / 2, midY - ImGui.getTextLineHeight() / 2f,
+                    TimelineColours.TEXT_DIM, hint);
+            }
+            return;
+        }
 
         for (SwitchSegment segment : f.switchSegments) {
             float from = Math.max(left, f.xOfTick(segment.fromTick()));
@@ -1395,66 +1670,70 @@ public class TimelineWindow {
                 continue;
             }
             int accent = TimelineColours.cameraAccent(segment.cameraIndex());
-            boolean hovered = segment == hoveredSegment && hoveredCut < 0;
-            int fill = TimelineColours.alpha(accent, hovered ? 0x66 : 0x3A);
-            drawList.addRectFilled(from, top + 3, to, bottom - 3, fill);
-            drawList.addRectFilled(from, top + 3, to, top + 6, TimelineColours.alpha(accent, 0xE0));
-            if (hovered) {
-                drawList.addRect(from, top + 3, to, bottom - 3, TimelineColours.alpha(accent, 0xFF));
+            if (to - from < 4) {
+                // Narrower than its own border: draw it as the boundary it is, not as a gap.
+                drawList.addRectFilled(from - 1, top + 3, to + 1, bottom - 3, TimelineColours.alpha(accent, 0xFF));
+                continue;
             }
+            int baseAlpha = laneUsable ? 0x3A : 0x16;
+            boolean hoveredShot = hover != null && hover.shot().camera() == segment.camera()
+                && hover.shot().startTick() == segment.fromTick();
+            boolean selectedShot = selectedShotStart == segment.fromTick();
+
+            drawList.addRectFilled(from, top + 3, to, bottom - 3,
+                TimelineColours.alpha(accent, hoveredShot || selectedShot ? 0x66 : baseAlpha));
+            // The camera's colour along the top is the shot's identity at a glance.
+            drawList.addRectFilled(from, top + 3, to, top + 7, TimelineColours.alpha(accent, laneUsable ? 0xE0 : 0x60));
 
             String name = f.scene.displayNameOf(segment.camera());
             float textWidth = ImGuiHelper.calcTextWidth(name);
-            if (to - from > textWidth + 12) {
-                // With a single span the name moves left, leaving the right-hand end free for the
-                // hint that teaches what the band does.
-                boolean lonely = f.switchCuts.isEmpty() && f.switchSegments.size() == 1;
-                float nameX = lonely ? from + 8 : from + (to - from - textWidth) / 2;
+            if (to - from > textWidth + 16) {
+                float nameX = from + (to - from - textWidth) / 2;
+                float nameY = midY - ImGui.getTextLineHeight() / 2f;
                 drawList.pushClipRect(from + 4, top, to - 4, bottom, true);
-                drawList.addText(nameX, midY - ImGui.getTextLineHeight() / 2f,
-                    TimelineColours.textOn(accent), name);
+                // White on every camera colour, with a shadow so it stays readable on the lighter
+                // accents - the shot name is the one label that must never be ambiguous.
+                drawList.addText(nameX + 1, nameY + 1, 0xA0000000, name);
+                drawList.addText(nameX, nameY, TimelineColours.TEXT, name);
                 drawList.popClipRect();
             }
-        }
 
-        if (hoveredSegment != null && hoveredCut < 0) {
-            ImGuiHelper.drawTooltip(I18n.get("flashback.timeline.segment_info",
-                    f.scene.displayNameOf(hoveredSegment.camera()),
-                    ticksToTimestamp(hoveredSegment.fromTick()), ticksToTimestamp(hoveredSegment.toTick()))
-                + "\n" + I18n.get("flashback.timeline.segment_hint"));
-        }
-
-        // Cuts: a bright tick with a flag, so where the camera changes reads at a glance.
-        for (SwitchCut cut : f.switchCuts) {
-            float cutX = f.xOfTick(cut.tick());
-            if (cutX < left - 10 || cutX > right + 10) {
-                continue;
+            // The boundary that starts this shot is drawn as a hard edge: that is where the cut is.
+            if (segment.fromTick() > 0 && from > left) {
+                boolean edgeHovered = hover != null && hover.edgeTick() == segment.fromTick();
+                float edgeWidth = edgeHovered ? 3f : 2f;
+                drawList.addRectFilled(from - edgeWidth / 2, top + 1, from + edgeWidth / 2, bottom - 1,
+                    edgeHovered ? TimelineColours.SELECTED : 0xFFFFFFFF);
+                if (edgeHovered) {
+                    // Grips on the edge, so it reads as something that can be dragged.
+                    drawList.addRectFilled(from - 5, midY - 1, from + 5, midY + 1, TimelineColours.SELECTED);
+                }
             }
-            int accent = TimelineColours.cameraAccent(cut.cameraIndex());
-            boolean selected = SELECTION.contains(cutsLane, cut.tick());
-            float flagHeight = cut.tick() == hoveredCut ? 13 : 10;
-            drawList.addLine(cutX, top + 2, cutX, bottom - 2, TimelineColours.alpha(accent, 0xFF), selected ? 3f : 2f);
-            drawList.addTriangleFilled(cutX - 5, top + 2, cutX + 5, top + 2, cutX, top + 2 + flagHeight, accent);
-            if (selected) {
-                drawList.addRect(cutX - 7, top + 1, cutX + 7, bottom - 1, TimelineColours.SELECTED);
+            if (selectedShot) {
+                drawList.addRect(from, top + 2, to, bottom - 2, TimelineColours.SELECTED);
             }
         }
 
-        if (hoveredCut >= 0) {
-            EditorCamera camera = f.scene.resolveCameraAt(hoveredCut);
-            ImGuiHelper.drawTooltip(I18n.get("flashback.timeline.cut_tooltip",
-                    camera == null ? "" : f.scene.displayNameOf(camera), ticksToTimestamp(hoveredCut))
-                + "\n" + I18n.get("flashback.timeline.cut_tooltip_hint"));
+        // ImGui draws tooltips above popups, so an open menu must suppress the hover tooltip or the
+        // two cover each other at the same pointer position.
+        if (hover != null && !openCutMenuNow && !shotMenuShowing) {
+            EditorScene.Shot shot = hover.shot();
+            String what = I18n.get("flashback.timeline.shot_range",
+                ticksToTimestamp(shot.startTick()), ticksToTimestamp(shot.endTick()));
+            String hint = hover.edgeTick() >= 0
+                ? I18n.get("flashback.timeline.shot_hint")
+                : I18n.get("flashback.timeline.shot_hint");
+            ImGuiHelper.drawTooltip(f.scene.displayNameOf(shot.camera()) + "\n" + what
+                + "  (" + I18n.get("flashback.timeline.shot_duration",
+                    ticksToTimestamp(shot.duration())) + ")"
+                + "\n" + hint);
         }
 
-        // Until the band has been used, it has to say what it is for: the band is the control.
-        if (f.switchCuts.isEmpty() && hoveredCut < 0 && hoveredSegment == null) {
-            String hint = I18n.get("flashback.timeline.segment_hint");
-            float textWidth = ImGuiHelper.calcTextWidth(hint);
-            float hintX = right - textWidth - ReplayUI.scaleUi(10);
-            if (hintX > left + 8) {
-                drawList.addText(hintX, midY - ImGui.getTextLineHeight() / 2f, TimelineColours.TEXT_DIM, hint);
-            }
+        // What the magnet lined up with, shown where it happened.
+        if (snapIndicatorTick >= 0 && (drag instanceof Drag.CutEdge || drag instanceof Drag.ShotBody
+                || drag instanceof Drag.Keys)) {
+            float x = f.xOfTick(snapIndicatorTick);
+            drawList.addLine(x, top - 6, x, bottom + 6, TimelineColours.DROP_INDICATOR, 2f);
         }
     }
 
@@ -1501,7 +1780,7 @@ public class TimelineWindow {
 
                 boolean hovered = !selected && Math.abs(f.mouseX - midX) <= f.keyframeSize
                     && Math.abs(f.mouseY - midY) <= f.keyframeSize;
-                int colour = keyframeColour(track, keyframe);
+                int colour = keyframeColour(f, track, keyframe);
                 if (!track.enabled) {
                     colour = TimelineColours.alpha(colour & 0x00FFFFFF, 0x70);
                 }
@@ -1528,13 +1807,28 @@ public class TimelineWindow {
         }
     }
 
-    private static int keyframeColour(KeyframeTrack track, Keyframe keyframe) {
+    private static int keyframeColour(Frame f, KeyframeTrack track, Keyframe keyframe) {
         if (track.keyframeType == TimelapseKeyframeType.INSTANCE && track.keyframesByTick.size() == 1) {
             return 0xFF155FFF;
         }
-        return track.customColour != 0 ? track.customColour : -1;
+        if (track.customColour != 0) {
+            return track.customColour;
+        }
+        if (track.cameraId != null) {
+            // A keyframe on a camera's own track belongs to that camera, so it carries its colour.
+            EditorCamera owner = f.scene.resolveCamera(track.cameraId);
+            if (owner != null) {
+                return TimelineColours.cameraAccent(f.scene.cameraIndexOf(owner));
+            }
+        }
+        return -1;
     }
 
+    /**
+     * A timelapse occupies a stretch of time, so it is drawn as a bar with two ends rather than as
+     * two unrelated points: the length of the bar is the length of the timelapse, and its ends are
+     * the keyframes you drag to change it.
+     */
     private static void drawTimelapseSpan(Frame f, ImDrawList drawList, KeyframeTrack track,
                                           TreeMap<Integer, Keyframe> keyframes, Map.Entry<Integer, Keyframe> entry,
                                           float midY) {
@@ -1548,35 +1842,37 @@ public class TimelineWindow {
         }
 
         int tickDelta = right.ticks - left.ticks;
-        String message = tickDelta <= 0
-            ? I18n.get("flashback.invalid").toUpperCase(Locale.ROOT)
+        boolean invalid = tickDelta <= 0;
+        String length = invalid ? I18n.get("flashback.invalid").toUpperCase(Locale.ROOT)
             : Utils.timeInTicksToString(tickDelta);
-        int textColour = tickDelta <= 0 ? 0xFF155FFF : 0xFFFFFFFF;
+        int colour = track.customColour != 0 ? track.customColour : 0xFF9CCC65;
+        if (!track.enabled) {
+            colour = TimelineColours.alpha(colour, 0x60);
+        }
 
         float leftX = f.xOfTick(floorEntry.getKey());
         float rightX = f.xOfTick(entry.getKey());
-        float midX = (leftX + rightX) / 2;
-        float textY = midY - f.rowHeight * 0.3f;
+        float barHeight = Math.max(6f, f.rowHeight * 0.42f);
+        float barLeft = leftX + f.keyframeSize;
+        float barRight = rightX - f.keyframeSize;
+        if (barRight <= barLeft) {
+            return;
+        }
 
-        String text = I18n.get("flashback.select_replay.duration", message);
+        drawList.addRectFilled(barLeft, midY - barHeight / 2, barRight, midY + barHeight / 2,
+            TimelineColours.alpha(colour, invalid ? 0x30 : 0x4A), 3f);
+        drawList.addRect(barLeft, midY - barHeight / 2, barRight, midY + barHeight / 2,
+            TimelineColours.alpha(colour, invalid ? 0x80 : 0xC0), 3f);
+
+        String text = I18n.get("flashback.select_replay.duration", length);
         float textWidth = ImGuiHelper.calcTextWidth(text);
-        if (textWidth > rightX - leftX) {
-            text = message;
+        if (textWidth > barRight - barLeft - 6) {
+            text = length;
             textWidth = ImGuiHelper.calcTextWidth(text);
         }
-        if (textWidth <= rightX - leftX) {
-            drawList.addText(midX - textWidth / 2, textY, textColour, text);
-        }
-
-        float startLine1 = leftX + f.keyframeSize;
-        float endLine1 = midX - textWidth / 2 - 5;
-        float startLine2 = midX + textWidth / 2 + 5;
-        float endLine2 = rightX - f.keyframeSize;
-        if (startLine1 < endLine1) {
-            drawList.addLine(startLine1, midY, endLine1, midY, 0x80FFFFFF);
-        }
-        if (startLine2 < endLine2) {
-            drawList.addLine(startLine2, midY, endLine2, midY, 0x80FFFFFF);
+        if (textWidth <= barRight - barLeft - 6) {
+            drawList.addText((barLeft + barRight - textWidth) / 2, midY - ImGui.getTextLineHeight() / 2f,
+                invalid ? 0xFFFF8080 : TimelineColours.TEXT, text);
         }
     }
 
@@ -1822,7 +2118,7 @@ public class TimelineWindow {
     private static boolean handleTransportClick(Frame f) {
         if (inControl(f, f.skipBackwardsX)) {
             Integer previousMarker = f.metadata.replayMarkers.floorKey(f.cursorTicks - 1);
-            f.replayServer.goToReplayTick(previousMarker != null ? previousMarker : 0);
+            seek(f, previousMarker != null ? previousMarker : 0);
             return true;
         }
         if (inControl(f, f.slowDownX)) {
@@ -1855,7 +2151,7 @@ public class TimelineWindow {
         }
         if (inControl(f, f.skipForwardsX)) {
             Integer nextMarker = f.metadata.replayMarkers.ceilingKey(f.cursorTicks + 1);
-            f.replayServer.goToReplayTick(nextMarker != null ? nextMarker : f.totalTicks);
+            seek(f, nextMarker != null ? nextMarker : f.totalTicks);
             return true;
         }
         return false;
@@ -1894,11 +2190,12 @@ public class TimelineWindow {
             }
         }
         f.replayServer.replayPaused = true;
-        f.replayServer.goToReplayTick(f.tickAtX(f.mouseX));
+        seek(f, f.tickAtX(f.mouseX));
         drag = new Drag.Head();
     }
 
     private static void handleCanvasClick(Frame f, boolean left, boolean right) {
+        selectedShotStart = -1;
         int rowIndex = f.rowAt(f.mouseY);
         KeyframeTrack track = f.layout.trackAt(rowIndex);
         if (track == null) {
@@ -1956,42 +2253,92 @@ public class TimelineWindow {
      * anywhere else. On the band between flags: ask which camera should be live from here, which is
      * the only way a cut is created.
      */
+    /**
+     * A shot is a clip: its body selects and slides it, its edges move the cut that bounds it, and
+     * right-clicking it opens the menu that changes which camera it shows.
+     */
     private static void handleCutsLaneClick(Frame f, KeyframeTrack cutsLane, boolean left, boolean right) {
-        int cut = cutAt(f, cutsLane);
-
-        if (cut >= 0) {
-            if (right) {
-                if (!SELECTION.contains(cutsLane, cut)) {
-                    SELECTION.replace(cutsLane, cut);
-                }
-                pendingInspector = new TimelineSelection.Ref(cutsLane, cut);
-                return;
+        ShotHit hit = shotHitTest(f, cutsLane);
+        if (hit == null) {
+            // No shot here - either there are no cameras yet or the lane is empty.
+            if (!f.scene.cameras.isEmpty() && (left || right)) {
+                requestCutMenu(f.tickAtX(f.mouseX));
             }
-            if (!left) {
-                return;
-            }
-            if (ReplayUI.isCtrlOrCmdDown()) {
-                SELECTION.toggle(cutsLane, cut);
-            } else if (!SELECTION.contains(cutsLane, cut)) {
-                SELECTION.replace(cutsLane, cut);
-            }
-            if (ImGui.isMouseDoubleClicked(ImGuiMouseButton.Left)) {
-                // Double-clicking a cut is the quickest way to preview it.
-                EditorCamera camera = f.scene.resolveCameraAt(cut);
-                if (camera != null) {
-                    editorState.previewCamera(camera, f.cursorTicks);
-                }
-                return;
-            }
-            drag = new Drag.Keys(cutsLane, cut, f.mouseX, f.mouseY);
             return;
         }
 
-        if (left || right) {
-            pendingCutMenuTrack = cutsLane;
-            pendingCutMenuTick = f.tickAtX(f.mouseX);
+        EditorScene.Shot shot = hit.shot();
+        if (right) {
+            SELECTION.clear();
+            selectedShotStart = shot.startTick();
+            pendingShotMenu = shot;
+            menuShot = shot;
+            menuStartTick = -1;
             openCutMenuNow = true;
+            return;
         }
+        if (!left) {
+            return;
+        }
+
+        SELECTION.clear();
+        selectedShotStart = shot.startTick();
+        if (hit.edgeTick() >= 0) {
+            drag = new Drag.CutEdge(hit.edgeTick(), f.tickAtX(f.mouseX) - hit.edgeTick());
+        } else {
+            drag = new Drag.ShotBody(shot.startTick(), shot.endTick(), hit.anchorTick(),
+                f.tickAtX(f.mouseX) - hit.anchorTick());
+        }
+    }
+
+    private record ShotHit(EditorScene.Shot shot, int edgeTick, int anchorTick) {}
+
+    /**
+     * What part of a shot the pointer is over: one of its boundaries, or its body.
+     *
+     * <p>The edge zone is deliberately narrow - it is the precision target - and the body is
+     * everything else, because sliding a whole shot is the coarser gesture.
+     */
+    @Nullable
+    private static ShotHit shotHitTest(Frame f, KeyframeTrack cutsLane) {
+        EditorScene.Shot shot = f.scene.shotAt(f.tickAtX(f.mouseX), f.totalTicks);
+        if (shot == null) {
+            return null;
+        }
+        float grab = ReplayUI.scaleUi(7);
+        int startCut = shot.cutTick();
+        int endCut = cutsLane.keyframesByTick.containsKey(shot.endTick()) ? shot.endTick() : -1;
+
+        float startDistance = startCut >= 0 ? Math.abs(f.xOfTick(shot.startTick()) - f.mouseX) : Float.MAX_VALUE;
+        float endDistance = endCut >= 0 ? Math.abs(f.xOfTick(shot.endTick()) - f.mouseX) : Float.MAX_VALUE;
+        if (startDistance <= grab || endDistance <= grab) {
+            int edgeTick = startDistance <= endDistance ? startCut : endCut;
+            // Dragging an edge lines that boundary up with the magnet.
+            return new ShotHit(shot, edgeTick, edgeTick);
+        }
+
+        // Sliding: anchor on the boundary nearest the grab, so a real boundary does the snapping.
+        boolean hasStart = startCut >= 0;
+        boolean hasEnd = endCut >= 0;
+        int anchor;
+        if (!hasStart) {
+            anchor = endCut;
+        } else if (!hasEnd) {
+            anchor = startCut;
+        } else {
+            anchor = startDistance <= endDistance ? startCut : endCut;
+        }
+        return new ShotHit(shot, -1, anchor);
+    }
+
+    /** Opens the shot menu to create a cut at this tick. */
+    private static void requestCutMenu(int tick) {
+        pendingCutMenuTrack = scene.cameraSwitchTrack();
+        pendingCutMenuTick = clampTick(tick);
+        pendingShotMenu = null;
+        menuShot = null;
+        menuStartTick = pendingCutMenuTick;
+        openCutMenuNow = true;
     }
 
     private static void beginMarquee(Frame f) {
@@ -2049,7 +2396,7 @@ public class TimelineWindow {
         switch (drag) {
             case Drag.Head ignored -> {
                 f.replayServer.replayPaused = true;
-                f.replayServer.goToReplayTick(snapTick(f, f.tickAtX(f.mouseX)));
+                seek(f, snapTick(f, f.tickAtX(f.mouseX)));
             }
             case Drag.Keys keys -> {
                 if (!keys.moved && (Math.abs(f.mouseX - keys.anchorX) > 2 || Math.abs(f.mouseY - keys.anchorY) > 2)) {
@@ -2057,10 +2404,29 @@ public class TimelineWindow {
                 }
                 if (keys.moved) {
                     String tooltip = moveTooltip(f, keys);
-                    if (!InputHelper.isShiftDownRaw() && scene.keyframeTracks.size() > 1) {
-                        tooltip += "\n" + I18n.get("flashback.hold_shift_to_snap");
+                    if (!InputHelper.isShiftDownRaw()) {
+                        tooltip += "\n" + I18n.get("flashback.hold_shift_for_free_positioning");
                     }
                     ImGuiHelper.drawTooltip(tooltip);
+                }
+            }
+            case Drag.CutEdge edge -> {
+                if (edge.target >= 0) {
+                    ImGui.setMouseCursor(ImGuiMouseCursor.ResizeEW);
+                    EditorCamera camera = f.scene.resolveCameraAt(edge.cutTick);
+                    ImGuiHelper.drawTooltip(I18n.get("flashback.timeline.cut_tooltip",
+                            camera == null ? "" : f.scene.displayNameOf(camera), ticksToTimestamp(edge.target))
+                        + "\n" + I18n.get("flashback.timeline.cut_tooltip_hint"));
+                }
+            }
+            case Drag.ShotBody body -> {
+                if (body.delta != 0) {
+                    int from = Math.max(0, body.startTick + body.delta);
+                    int to = Math.min(f.totalTicks, body.endTick + body.delta);
+                    ImGuiHelper.drawTooltip(I18n.get("flashback.timeline.shot_range",
+                            ticksToTimestamp(from), ticksToTimestamp(to))
+                        + "\n" + I18n.get("flashback.timeline.shot_duration",
+                            ticksToTimestamp(to - from)));
                 }
             }
             case Drag.Row row -> row.slot = f.layout.insertionSlot(row.rowIndex, f.mouseY, f.contentY);
@@ -2120,6 +2486,20 @@ public class TimelineWindow {
                 applyKeyframeMove(f, keys);
             } else {
                 SELECTION.setPrimary(new TimelineSelection.Ref(keys.track, keys.tick));
+            }
+        } else if (finished instanceof Drag.CutEdge edge) {
+            if (edge.target >= 0 && edge.target != edge.cutTick) {
+                // Without the write stamp the edit would be made against the read snapshot and then
+                // thrown away when the snapshot is released, so the drag would appear to do nothing.
+                upgradeToWrite();
+                TimelineEdits.moveCut(scene, editorState, edge.cutTick, edge.target);
+                selectedShotStart = edge.target;
+            }
+        } else if (finished instanceof Drag.ShotBody body) {
+            if (body.delta != 0) {
+                upgradeToWrite();
+                TimelineEdits.slideShot(scene, editorState, body.startTick, body.endTick, body.delta);
+                selectedShotStart = Math.max(0, body.startTick + body.delta);
             }
         } else if (finished instanceof Drag.Row row) {
             applyRowReorder(f, row);
@@ -2211,15 +2591,10 @@ public class TimelineWindow {
     }
 
     /** How far the grabbed keyframe has been moved, with shift snapping applied. */
+    /** How far a dragged item should move, with the magnet applied to where it would land. */
     private static int snappedDelta(TickScale scale, float mouseX, int grabbedTick, @Nullable KeyframeTrack dragged) {
-        int delta = scale.tickAtX(mouseX) - grabbedTick;
-        if (InputHelper.isShiftDownRaw()) {
-            Integer snapped = nearestKeyframeTick(scale, mouseX, grabbedTick, dragged);
-            if (snapped != null) {
-                delta = snapped - grabbedTick;
-            }
-        }
-        return delta;
+        int raw = scale.tickAtX(mouseX);
+        return snapDragTick(scale, dragged, raw, grabbedTick) - grabbedTick;
     }
 
     /** The tick a grabbed keyframe is drawn at, including the current drag offset. */
@@ -2236,37 +2611,82 @@ public class TimelineWindow {
             + I18n.get("flashback.tick_offset", (delta >= 0 ? "+" : "") + delta);
     }
 
-    private static int snapTick(Frame f, int tick) {
-        if (!InputHelper.isShiftDownRaw()) {
-            return tick;
-        }
-        Integer closest = nearestKeyframeTick(f.scale, f.mouseX, tick, null);
-        return closest != null ? closest : tick;
-    }
+    /** Where the magnet last pulled a drag to, so the frame can show what it lined up with. */
+    private static int snapIndicatorTick = -1;
 
-    /** The keyframe nearest the pointer, skipping the track being dragged. */
-    @Nullable
-    private static Integer nearestKeyframeTick(TickScale scale, float mouseX, int tick, @Nullable KeyframeTrack exclude) {
-        Integer closest = null;
-        float closestDistance = scale.pixelsPerTick() * 40;
+    /** Pixels within which a dragged tick is pulled onto a nearby tick. */
+    private static final float SNAP_PIXELS = 7f;
+
+    // How much one notch of the wheel does. Deliberately gentle: a trackpad sends many small events,
+    // and overshooting the section you wanted is worse than taking one more gesture to reach it.
+    /** Pixels the row list moves per notch. */
+    private static final float SCROLL_PIXELS_PER_NOTCH = 26f;
+    /** Fraction of the visible span the timeline moves per notch. */
+    private static final double PAN_FRACTION_PER_NOTCH = 0.08;
+    /** Fraction of the visible span one notch of zoom keeps. */
+    private static final double ZOOM_FACTOR_PER_NOTCH = 0.90;
+
+    /**
+     * The ticks a drag lines up with: the ends of the replay and the playhead, then every cut and
+     * keyframe, since those are the points an edit is meant to line up with.
+     *
+     * <p>Snapping is on by default and Shift turns it off, which is what editing software has trained
+     * everyone to expect: the magnet helps by default, and a key gives you the raw value when wanted.
+     */
+    private static List<Integer> snapTargets(@Nullable KeyframeTrack draggedTrack, int excludeTick) {
+        List<Integer> targets = new ArrayList<>();
+        targets.add(0);
+        targets.add(editingTotalTicks);
+        targets.add(currentCursorTick);
+        if (exportStartTick >= 0) {
+            targets.add(exportStartTick);
+        }
+        if (exportEndTick >= 0) {
+            targets.add(exportEndTick);
+        }
         for (KeyframeTrack track : scene.keyframeTracks) {
-            if (track == exclude) {
-                continue;
-            }
-            Integer floor = track.keyframesByTick.floorKey(tick);
-            Integer ceiling = track.keyframesByTick.ceilingKey(tick);
-            for (Integer option : new Integer[]{floor, ceiling}) {
-                if (option == null) {
+            for (int tick : track.keyframesByTick.keySet()) {
+                if (track == draggedTrack && tick == excludeTick) {
                     continue;
                 }
-                float distance = Math.abs(scale.xOfTick(option) - mouseX);
-                if (distance < closestDistance) {
-                    closestDistance = distance;
-                    closest = option;
-                }
+                targets.add(tick);
             }
         }
-        return closest;
+        return targets;
+    }
+
+    /**
+     * Pulls a tick onto the nearest snap target if one is close enough.
+     *
+     * @param draggedTrack the track being dragged, whose own keyframes are not targets
+     * @param excludeTick  the tick being dragged, which must not snap to itself
+     */
+    private static int snapDragTick(TickScale scale, @Nullable KeyframeTrack draggedTrack, int tick, int excludeTick) {
+        if (InputHelper.isShiftDownRaw()) {
+            snapIndicatorTick = -1;
+            return tick;
+        }
+        float tolerance = SNAP_PIXELS * ReplayUI.scaleUi(1);
+        int best = tick;
+        float bestDistance = tolerance;
+        for (int target : snapTargets(draggedTrack, excludeTick)) {
+            float distance = Math.abs(scale.xOfTick(target) - scale.xOfTick(tick));
+            if (distance <= bestDistance) {
+                bestDistance = distance;
+                best = target;
+            }
+        }
+        snapIndicatorTick = best == tick ? -1 : best;
+        return best;
+    }
+
+    /** Snaps the playhead while scrubbing, using the same magnet as every other drag. */
+    private static int snapTick(Frame f, int tick) {
+        return snapDragTick(f.scale, null, tick, tick);
+    }
+
+    private static int clampTick(int tick) {
+        return Math.max(0, Math.min(editingTotalTicks, tick));
     }
 
     private static void selectWithin(Frame f, Drag.Marquee marquee) {
@@ -2293,7 +2713,7 @@ public class TimelineWindow {
     }
 
     private static void jumpToMarker(Frame f, int markerTick) {
-        f.replayServer.goToReplayTick(markerTick);
+        seek(f, markerTick);
         ReplayMarker marker = f.metadata.replayMarkers.get(markerTick);
         if (marker == null || marker.position() == null) {
             return;
@@ -2336,45 +2756,79 @@ public class TimelineWindow {
 
     // -- Scrolling and keys ----------------------------------------------------------------------
 
+    /** The row list's scroll offset, for the offscreen harness to check. */
+    public static double debugRowScroll() {
+        return rowScroll;
+    }
+
+    /**
+     * Moves the playhead and makes the world catch up.
+     *
+     * <p>Keyframes are only reapplied while the replay is playing, plus whenever a seek asks for it.
+     * Scrubbing pauses the replay, so without this the camera would keep showing wherever it was
+     * before - which is why scrubbing has to ask, exactly like stepping does.
+     */
+    private static void seek(Frame f, int tick) {
+        int target = Math.max(0, Math.min(f.totalTicks, tick));
+        // Re-arming the same jump every frame would keep the server from ever taking it, and the
+        // server is what re-resolves who is being spectated. Only a moved playhead asks for a jump.
+        if (f.replayServer.jumpToTick != target) {
+            f.replayServer.goToReplayTick(target);
+        }
+        f.replayServer.forceApplyKeyframes.set(true);
+    }
+
     private static void handleScroll(Frame f) {
-        int scroll = (int) Math.signum(ReplayUI.getIO().getMouseWheel());
-        if (scroll == 0 || !f.mouseInTimeline || f.mouseY < f.y || f.mouseY > f.y + f.height) {
+        // A trackpad offers both axes and often only the horizontal one when scrolling a timeline, so
+        // take whichever the gesture produced.
+        float vertical = ReplayUI.getIO().getMouseWheel();
+        float horizontal = ReplayUI.getIO().getMouseWheelH();
+        boolean sideways = Math.abs(horizontal) > Math.abs(vertical);
+        float wheel = sideways ? horizontal : vertical;
+        // A trackpad's horizontal gesture is reported in the opposite sense to the direction the
+        // fingers travel, so it is flipped to pan the way the gesture looks like it should. The
+        // vertical axis is already the right way round and is left alone.
+        float panWheel = sideways ? -wheel : wheel;
+        // Zooming is a whole-window gesture: it should work with the pointer over the rows as well as
+        // over the timeline, because the section you want to zoom into is often named in the rows.
+        if (wheel == 0 || !f.mouseOverWindow) {
             return;
         }
 
         double zoomMin = editorState.zoomMin;
         double zoomMax = editorState.zoomMax;
+        double minimumSpan = Math.min(1.0, 2.0 / Math.max(1, f.totalTicks));
+        double span = zoomMax - zoomMin;
 
-        if (Keybinds.TIMELINE_ZOOM_SCROLL.areAllModifiersDown()) {
-            double mousePercentage = (f.mouseX - f.timelineLeft()) / Math.max(1, f.timelineWidth);
-            double zoomDelta = zoomMax - zoomMin;
-            if (zoomDelta <= 0.001) {
-                return;
-            }
-            if (scroll > 0) {
-                editorState.zoomMin += zoomDelta * 0.05 * mousePercentage;
-                editorState.zoomMax -= zoomDelta * 0.05 * (1 - mousePercentage);
-            } else {
-                editorState.zoomMin = Math.max(0, zoomMin - zoomDelta * 0.05 / 0.9 * mousePercentage);
-                editorState.zoomMax = Math.min(1, zoomMax + zoomDelta * 0.05 / 0.9 * (1 - mousePercentage));
-            }
-        } else if (Keybinds.TIMELINE_MOVE_SCROLL.areAllModifiersDown()) {
-            if (scroll > 0) {
-                if (zoomMax >= 0.99) {
-                    editorState.zoomMin += 1.0 - zoomMax;
-                    editorState.zoomMax = 1.0;
-                } else {
-                    editorState.zoomMin += 0.01;
-                    editorState.zoomMax += 0.01;
-                }
-            } else if (zoomMin <= 0.01) {
-                editorState.zoomMax -= zoomMin;
-                editorState.zoomMin = 0.0;
-            } else {
-                editorState.zoomMin -= 0.01;
-                editorState.zoomMax -= 0.01;
-            }
+        // Both command keys zoom, whichever one the platform or the user thinks of as "command",
+        // and the binding is honoured on top so a customised gesture still works.
+        ImGuiIO io = ReplayUI.getIO();
+        boolean zoomModifier = io.getKeyCtrl() || io.getKeySuper()
+            || Keybinds.TIMELINE_ZOOM_SCROLL.areAllModifiersDown();
+        boolean panModifier = io.getKeyShift() || Keybinds.TIMELINE_MOVE_SCROLL.areAllModifiersDown();
+        if (zoomModifier) {
+            // Zoom about the pointer: whatever is under the cursor stays under the cursor, which is
+            // what makes zooming feel like moving a magnifier rather than jumping.
+            double factor = Math.pow(ZOOM_FACTOR_PER_NOTCH, wheel);
+            double newSpan = Math.max(minimumSpan, Math.min(1.0, span * factor));
+            double anchor = Math.max(0, Math.min(1, (f.mouseX - f.timelineLeft()) / Math.max(1, f.timelineWidth)));
+            double newMin = zoomMin + (span - newSpan) * anchor;
+            newMin = Math.max(0, Math.min(1 - newSpan, newMin));
+            editorState.zoomMin = newMin;
+            editorState.zoomMax = newMin + newSpan;
+        } else if (panModifier || sideways || !f.mouseOverRows) {
+            // Move along the replay by a fraction of what is on screen, so one notch moves the same
+            // amount of material whatever the zoom level. Over the ruler there is nothing to scroll
+            // vertically, so the wheel moves time there too.
+            double step = span * PAN_FRACTION_PER_NOTCH * panWheel;
+            double newMin = Math.max(0, Math.min(1 - span, zoomMin + step));
+            editorState.zoomMin = newMin;
+            editorState.zoomMax = newMin + span;
         } else {
+            // Nothing else claims it, so it scrolls the row list. This is the plain meaning of the
+            // wheel, and it works over the rows and over the timeline alike.
+            double pixelsPerNotch = SCROLL_PIXELS_PER_NOTCH * ReplayUI.getUiScale();
+            rowScroll = Math.max(0, Math.min(rowScrollMax, rowScroll - wheel * pixelsPerNotch));
             return;
         }
         editorState.markDirty();
@@ -2387,13 +2841,11 @@ public class TimelineWindow {
         if (ImGui.isKeyPressed(ImGuiKey.LeftArrow, false)) {
             pendingStepBackwardsTicks += ReplayUI.isCtrlOrCmdDown() ? 5 : 1;
         } else if (pendingStepBackwardsTicks > 0 && !ImGui.isKeyDown(ImGuiKey.LeftArrow)) {
-            f.replayServer.goToReplayTick(Math.max(0, f.replayServer.getReplayTick() - pendingStepBackwardsTicks));
-            f.replayServer.forceApplyKeyframes.set(true);
+            seek(f, f.replayServer.getReplayTick() - pendingStepBackwardsTicks);
             pendingStepBackwardsTicks = 0;
         }
         if (ImGui.isKeyPressed(ImGuiKey.RightArrow, false)) {
-            f.replayServer.goToReplayTick(Math.min(f.totalTicks, f.cursorTicks + (ReplayUI.isCtrlOrCmdDown() ? 5 : 1)));
-            f.replayServer.forceApplyKeyframes.set(true);
+            seek(f, f.cursorTicks + (ReplayUI.isCtrlOrCmdDown() ? 5 : 1));
         }
         if (ImGui.isKeyPressed(ImGuiKey.UpArrow, false)) {
             jumpToNeighbouringKeyframe(f, 1);
@@ -2405,6 +2857,8 @@ public class TimelineWindow {
         boolean delete = ImGui.isKeyPressed(ImGuiKey.Delete, false) || ImGui.isKeyPressed(ImGuiKey.Backspace, false);
         if (delete && !SELECTION.isEmpty()) {
             deleteSelection();
+        } else if (delete) {
+            deleteSelectedShot();
         }
 
         if (Keybinds.UNDO.isPressed(false)) {
@@ -2464,7 +2918,7 @@ public class TimelineWindow {
             } else if (!InputHelper.isShiftDownRaw()) {
                 // One tooltip with both hints: two tooltips would draw on top of each other.
                 ImGuiHelper.drawTooltip(I18n.get("flashback.hold_ctrl_to_apply_keyframes")
-                    + "\n" + I18n.get("flashback.hold_shift_to_snap_to_keyframes"));
+                    + "\n" + I18n.get("flashback.hold_shift_for_free_positioning"));
             }
         }
     }
@@ -2528,7 +2982,7 @@ public class TimelineWindow {
                 }
             }
         }
-        f.replayServer.goToReplayTick(target);
+        seek(f, target);
         f.replayServer.forceApplyKeyframes.set(true);
     }
 
@@ -2617,6 +3071,27 @@ public class TimelineWindow {
         if (change != null) {
             change.apply(handler);
         }
+    }
+
+    /**
+     * Removes the selected shot from the programme.
+     *
+     * <p>A shot is a stretch of the timeline, so deleting it means removing the cut that starts it:
+     * the previous camera then runs on through where it used to be. The first shot has no cut of its
+     * own, so there is nothing to remove and nothing happens.
+     */
+    private static void deleteSelectedShot() {
+        if (selectedShotStart < 0) {
+            return;
+        }
+        EditorScene.Shot shot = scene.shotAt(selectedShotStart, editingTotalTicks);
+        if (shot == null || shot.cutTick() < 0) {
+            return;
+        }
+        upgradeToWrite();
+        TimelineEdits.deleteShot(scene, editorState, shot.cutTick());
+        selectedShotStart = -1;
+        inspectorOpen = false;
     }
 
     private static void deleteSelection() {
@@ -2875,45 +3350,99 @@ public class TimelineWindow {
      *
      * <p>The camera already live at that moment is marked, so it is obvious what the choice changes.
      */
+    /**
+     * The shot menu: what this shot is, and everything that can be done to it.
+     *
+     * <p>It serves both ways a shot is chosen - right-clicking an existing one, and asking for a cut
+     * at the playhead - because those ask the same question: which camera should be live here. The
+     * camera already showing is ticked rather than disabled, so re-cutting is always possible.
+     */
     private static void drawCutMenu(Frame f) {
-        if (pendingCutMenuTrack == null) {
+        if (pendingCutMenuTrack != null || pendingShotMenu != null) {
+            menuShot = pendingShotMenu;
+            menuTick = pendingShotMenu != null ? pendingShotMenu.startTick() : pendingCutMenuTick;
+            pendingCutMenuTrack = null;
+            pendingShotMenu = null;
+        }
+        if (menuShot == null && menuStartTick < 0) {
             return;
         }
-        KeyframeTrack cutsLane = pendingCutMenuTrack;
-        int tick = pendingCutMenuTick;
-        pendingCutMenuTrack = null;
+        EditorScene.Shot shot = menuShot;
+        int tick = menuTick;
 
         ImGui.pushID("##CutMenuScope");
         if (openCutMenuNow) {
             ImGui.openPopup("##CutMenu");
             openCutMenuNow = false;
         }
-        if (ImGuiHelper.beginPopup("##CutMenu")) {
-            ImGui.textDisabled(I18n.get("flashback.timeline.cut_at", ticksToTimestamp(tick), tick));
+        boolean begun = ImGuiHelper.beginPopup("##CutMenu");
+        shotMenuShowing = begun;
+        if (!begun && !openCutMenuNow) {
+            // The user dismissed it, so there is nothing left to remember.
+            menuShot = null;
+            menuStartTick = -1;
+        }
+        if (begun) {
+            if (shot != null) {
+                // The header is the shot's identity: camera, where it runs, how long it lasts.
+                int accent = TimelineColours.cameraAccent(f.scene.cameraIndexOf(shot.camera()));
+                ImGui.textColored(accent, f.scene.displayNameOf(shot.camera()));
+                ImGui.textDisabled(I18n.get("flashback.timeline.shot_range",
+                    ticksToTimestamp(shot.startTick()), ticksToTimestamp(shot.endTick()))
+                    + "   " + I18n.get("flashback.timeline.shot_duration", ticksToTimestamp(shot.duration())));
+            } else {
+                ImGui.textDisabled(I18n.get("flashback.timeline.cut_at", ticksToTimestamp(tick), tick));
+            }
             ImGui.separator();
 
             if (f.scene.cameras.isEmpty()) {
                 ImGui.textDisabled(I18n.get("flashback.timeline.no_cameras"));
             } else {
-                EditorCamera live = f.scene.resolveCameraAt(tick);
+                EditorCamera current = shot != null ? shot.camera() : f.scene.resolveCameraAt(tick);
                 for (EditorCamera camera : f.scene.cameras) {
                     int accent = TimelineColours.cameraAccent(f.scene.cameraIndexOf(camera));
-                    boolean isLive = camera == live;
-                    // The camera already being output is the current state, not a choice: it is shown
-                    // ticked and cannot be picked, so a cut can never mean "stay as you are".
+                    boolean isCurrent = camera == current;
                     if (ImGui.menuItem("\ue04b " + f.scene.displayNameOf(camera) + "##cut_" + camera.id,
-                            null, isLive, !isLive)) {
+                            null, isCurrent, true)) {
                         upgradeToWrite();
-                        TimelineEdits.cutToCamera(scene, editorState, camera, tick);
+                        if (shot != null) {
+                            TimelineEdits.cutShotToCamera(scene, editorState, shot.startTick(), camera);
+                        } else {
+                            TimelineEdits.cutToCamera(scene, editorState, camera, tick);
+                        }
+                        selectedShotStart = shot != null ? shot.startTick() : tick;
                         ImGui.closeCurrentPopup();
                         inspectorOpen = false;
                     }
-                    // The same colour the camera's span uses in the lane.
                     drawColourChip(accent);
-                    if (isLive) {
+                    if (isCurrent) {
                         ImGui.sameLine();
                         ImGui.textDisabled(I18n.get("flashback.timeline.live"));
                     }
+                }
+            }
+
+            if (shot != null) {
+                ImGui.separator();
+                boolean insideShot = f.cursorTicks > shot.startTick() && f.cursorTicks < shot.endTick();
+                if (ImGui.menuItem("\ue14e " + I18n.get("flashback.timeline.split_at_playhead") + "##splitShot",
+                        null, false, insideShot)) {
+                    upgradeToWrite();
+                    TimelineEdits.cutToCamera(scene, editorState, shot.camera(), f.cursorTicks);
+                    selectedShotStart = f.cursorTicks;
+                    ImGui.closeCurrentPopup();
+                }
+                if (ImGui.menuItem("\ue8f4 " + I18n.get("flashback.preview") + "##previewShot")) {
+                    editorState.previewCamera(shot.camera(), f.cursorTicks);
+                    ImGui.closeCurrentPopup();
+                }
+                ImGui.separator();
+                if (ImGui.menuItem("\ue872 " + I18n.get("flashback.timeline.remove_shot") + "##removeShot",
+                        null, false, shot.cutTick() >= 0)) {
+                    upgradeToWrite();
+                    TimelineEdits.deleteShot(scene, editorState, shot.cutTick());
+                    selectedShotStart = -1;
+                    ImGui.closeCurrentPopup();
                 }
             }
             ImGui.endPopup();

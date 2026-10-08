@@ -63,13 +63,4 @@ public final class TimelineColours {
         return (argb & 0x00FFFFFF) | ((a & 0xFF) << 24);
     }
 
-    /** A text colour that stays readable on top of a band of this accent. */
-    public static int textOn(int argb) {
-        int r = (argb >> 16) & 0xFF;
-        int g = (argb >> 8) & 0xFF;
-        int b = argb & 0xFF;
-        int luminance = (r * 299 + g * 587 + b * 114) / 1000;
-        return luminance > 150 ? 0xFF202020 : 0xFFFFFFFF;
-    }
-
 }
