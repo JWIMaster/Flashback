@@ -62,10 +62,7 @@
     "visuals.MixinParticleEngine",
     "visuals.MixinPlayer",
     "visuals.MixinPlayerRenderer",
-    "visuals.MixinWeatherEffectRenderer",
-    "gui.MixinAbstractContainerScreen",
-    "gui.MixinScreenGuiRecorder",
-    "gui.MixinMinecraftGuiRecorder"
+    "visuals.MixinWeatherEffectRenderer"
   ],
   "injectors": {
     "defaultRequire": 1

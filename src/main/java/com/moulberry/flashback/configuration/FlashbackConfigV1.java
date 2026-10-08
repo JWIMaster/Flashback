@@ -311,21 +311,6 @@ public class FlashbackConfigV1 {
         public boolean enableOverrideFovByDefault = false;
 
         public boolean nfdUsePortal = true;
-
-        /**
-         * Whether every container the player opens is written to a log, with everything that moves
-         * inside it, under {@code flashback/gui_logs/}.
-         */
-        public boolean recordGuiEvents = false;
-
-        /**
-         * Whether the containers a replay recorded - chests, crafting tables, furnaces - are shown
-         * when watching it back, instead of being skipped.
-         *
-         * <p>Off by default: showing them is still being built, and a replay that does not ask for it
-         * must behave exactly as it always did.
-         */
-        public boolean showGuisInReplays = false;
     }
 
     public SubcategoryInternalExport internalExport = new SubcategoryInternalExport();

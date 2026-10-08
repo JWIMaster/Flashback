@@ -12,29 +12,7 @@ import java.util.Set;
 
 public class IgnoredPacketSet {
 
-    /**
-     * The packets that only matter when recorded containers are being shown.
-     *
-     * <p>They are worth a lot of bytes - a slot update is sent every time a player moves an item -
-     * so they are only written when {@code showGuisInReplays} asks for them, and a replay made
-     * without that behaves and weighs what it always did.
-     */
-    private static final Set<Class<?>> CONTAINER_PACKETS = Set.of(
-        ClientboundOpenScreenPacket.class,
-        ClientboundContainerClosePacket.class,
-        ClientboundContainerSetContentPacket.class,
-        ClientboundContainerSetDataPacket.class,
-        ClientboundContainerSetSlotPacket.class,
-        ClientboundSetCursorItemPacket.class,
-        ClientboundMerchantOffersPacket.class,
-        ClientboundMountScreenOpenPacket.class
-    );
-
     public static boolean isIgnored(Packet<?> packet) {
-        if (CONTAINER_PACKETS.contains(packet.getClass())
-                && !com.moulberry.flashback.gui.GuiPlayback.enabled()) {
-            return true;
-        }
         return IGNORED.contains(packet.getClass());
     }
 
@@ -55,14 +33,6 @@ public class IgnoredPacketSet {
         ClientboundTrackedWaypointPacket.class
     );
 
-    /**
-     * Packets that are not written to a replay at all.
-     *
-     * <p>Containers are deliberately absent: a replay is meant to show what the player saw, and what
-     * they saw when they opened a chest was a chest. Those packets are recorded and then only applied
-     * at playback if {@code showGuisInReplays} asks for it, so a replay made by someone who does not
-     * want them still behaves as before.
-     */
     private static final Set<Class<?>> IGNORED = Set.of(
         // Ignored because these are added directly by mixin/record/MixinClientLevel
         ClientboundLevelEventPacket.class,
@@ -99,8 +69,14 @@ public class IgnoredPacketSet {
         ClientboundPlayerChatPacket.class,
         ClientboundDeleteChatPacket.class,
         ClientboundMoveMinecartPacket.class,
+        ClientboundContainerClosePacket.class,
+        ClientboundContainerSetContentPacket.class,
+        ClientboundMountScreenOpenPacket.class,
+        ClientboundContainerSetDataPacket.class,
+        ClientboundContainerSetSlotPacket.class,
         ClientboundForgetLevelChunkPacket.class,
         ClientboundPlayerAbilitiesPacket.class,
+        ClientboundSetCursorItemPacket.class,
         ClientboundSetExperiencePacket.class,
         ClientboundSetHealthPacket.class,
         ClientboundSetPlayerInventoryPacket.class,
@@ -119,6 +95,8 @@ public class IgnoredPacketSet {
         ClientboundUpdateRecipesPacket.class,
         ClientboundTagQueryPacket.class,
         ClientboundOpenBookPacket.class,
+        ClientboundOpenScreenPacket.class,
+        ClientboundMerchantOffersPacket.class,
         ClientboundSetChunkCacheRadiusPacket.class,
         ClientboundSetSimulationDistancePacket.class,
         ClientboundSetChunkCacheCenterPacket.class,
