@@ -26,42 +26,40 @@ public final class CameraSourceDisplay {
         }
         EditorState editorState = EditorStateManager.getCurrent();
         if (editorState != null) {
-            for (com.moulberry.flashback.state.KeyframeTrack track : editorState.currentSceneTracks()) {
+            // A camera and its sub-parts (a timelapse) share an id, so take the name from a viewpoint
+            // track wherever there is one: a sub-part's own name describes the sub-part, not the
+            // camera it hangs off, and would otherwise depend on the order the tracks happen to be in.
+            KeyframeTrack best = null;
+            for (KeyframeTrack track : editorState.currentSceneTracks()) {
                 if (!sourceId.equals(track.cameraId)) {
                     continue;
                 }
+                if (best == null || (NamedCamera.isViewpointTrack(track) && !NamedCamera.isViewpointTrack(best))) {
+                    best = track;
+                }
+            }
 
+            if (best != null) {
                 // An explicit timeline name always wins, for any source type.
-                if (track.customName != null && !track.customName.isBlank()) {
-                    return track.customName;
+                if (best.customName != null && !best.customName.isBlank()) {
+                    return best.customName;
                 }
 
-                if (track.keyframeType instanceof com.moulberry.flashback.keyframe.types.SpectateKeyframeType) {
+                if (best.keyframeType instanceof com.moulberry.flashback.keyframe.types.SpectateKeyframeType) {
                     // A spectate object's own keyframes say who is watched, so show that.
-                    Object first = track.keyframesByTick.isEmpty() ? null
-                        : track.keyframesByTick.firstEntry().getValue();
+                    Object first = best.keyframesByTick.isEmpty() ? null
+                        : best.keyframesByTick.firstEntry().getValue();
                     if (first instanceof com.moulberry.flashback.keyframe.impl.SpectateKeyframe spectate) {
                         return describeSpectate(spectate.target);
                     }
                     return "Spectate";
                 }
-
-                if (track.keyframeType instanceof com.moulberry.flashback.keyframe.types.TimelapseKeyframeType) {
-                    return com.moulberry.flashback.keyframe.types.TimelapseKeyframeType.INSTANCE.name();
-                }
-            }
-        }
-        // A name typed on the timeline wins, so renaming a track renames the camera everywhere -
-        // otherwise the switch would keep showing a generated "Camera 4" that matches nothing.
-        if (editorState != null) {
-            for (com.moulberry.flashback.state.KeyframeTrack track : editorState.currentSceneTracks()) {
-                if (sourceId.equals(track.cameraId)
-                    && track.customName != null && !track.customName.isBlank()) {
-                    return track.customName;
-                }
             }
         }
 
+        // A name typed on the timeline wins, so renaming a camera's track renames the camera
+        // everywhere - otherwise the switch would keep showing a generated "Camera 4" that matches
+        // nothing.
         return describeCamera(sourceId);
     }
 
