@@ -78,10 +78,9 @@ public class CameraSwitchKeyframeType implements KeyframeType<CameraSwitchKeyfra
     }
 
     /**
-     * Lists everything that can be output: the cameras, and the spectate objects. Each camera is
-     * followed by its sub-parts (a timelapse), which belong to the camera rather than being
-     * something to cut to. Also offers creating a new camera, since a source has to exist before it
-     * can be cut to.
+     * Lists every source that can be output: the camera tracks (grouped by camera) and the spectate
+     * objects. Also offers creating a new camera, since a source has to exist before it can be cut
+     * to.
      *
      * @return the chosen source, or null while the user is still choosing
      */
@@ -102,9 +101,8 @@ public class CameraSwitchKeyframeType implements KeyframeType<CameraSwitchKeyfra
             if (track.cameraId == null) {
                 continue;
             }
-            // A spectate object is a source in its own right and is listed separately. A timelapse
-            // is a sub-part of its camera, so it must not add an entry of its own either - which is
-            // what used to make a timelapse show up here as though it were another camera.
+            // Spectate and timelapse are sources in their own right and are listed separately.
+            // Omitting only spectate here made a timelapse track show up as an extra camera.
             if (track.keyframeType instanceof SpectateKeyframeType
                 || track.keyframeType instanceof TimelapseKeyframeType) {
                 continue;
@@ -128,10 +126,8 @@ public class CameraSwitchKeyframeType implements KeyframeType<CameraSwitchKeyfra
             }
 
             // A name typed on the timeline wins, so the switch matches the track you are looking at.
-            // Only viewpoint tracks count: a renamed timelapse names the timelapse, not the camera.
             for (KeyframeTrack track : tracks) {
                 if (entry.getKey().equals(track.cameraId)
-                    && NamedCamera.isViewpointTrack(track)
                     && track.customName != null && !track.customName.isBlank()) {
                     name = track.customName;
                     break;
@@ -144,26 +140,14 @@ public class CameraSwitchKeyframeType implements KeyframeType<CameraSwitchKeyfra
             if (ImGui.selectable(entry.getValue() + "##source_camera_" + entry.getKey(), false)) {
                 return CameraSource.of(entry.getKey());
             }
-
-            // Sub-parts of this camera. They are shown so it is clear what comes along with the cut,
-            // but they are not selectable: a timelapse is part of its camera, not a viewpoint.
-            for (KeyframeTrack track : tracks) {
-                if (!entry.getKey().equals(track.cameraId)) {
-                    continue;
-                }
-                if (!(track.keyframeType instanceof TimelapseKeyframeType)) {
-                    continue;
-                }
-                ImGui.indent();
-                ImGui.textDisabled(describeSubPart(track));
-                ImGui.unindent();
-            }
         }
 
-        // Other sources: a spectate object owns the output, so it can be cut to exactly like a camera.
+        // Other sources: a spectate or timelapse track is a source in its own right, so it can be
+        // cut to exactly like a camera.
         List<KeyframeTrack> otherSources = new ArrayList<>();
         for (KeyframeTrack track : tracks) {
-            if (track.keyframeType instanceof SpectateKeyframeType) {
+            if (track.keyframeType instanceof SpectateKeyframeType
+                || track.keyframeType instanceof TimelapseKeyframeType) {
                 otherSources.add(track);
             }
         }
@@ -199,17 +183,6 @@ public class CameraSwitchKeyframeType implements KeyframeType<CameraSwitchKeyfra
         }
 
         return null;
-    }
-
-    /**
-     * The label for a camera's sub-part, which is the track's own name if it was renamed on the
-     * timeline and the keyframe type's name otherwise.
-     */
-    private static String describeSubPart(KeyframeTrack track) {
-        if (track.customName != null && !track.customName.isBlank()) {
-            return track.customName;
-        }
-        return track.keyframeType.name();
     }
 
 }

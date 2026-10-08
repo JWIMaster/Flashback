@@ -2290,9 +2290,10 @@ public class TimelineWindow {
                     // A camera-scoped track belongs to the camera currently being worked on, so it
                     // becomes part of that camera the moment it is added - the track is the camera.
                     java.util.UUID cameraId = null;
-                    if (type instanceof com.moulberry.flashback.keyframe.types.SpectateKeyframeType) {
-                        // A spectate object is a source in its own right, so it gets a fresh id rather
-                        // than joining whichever camera is active.
+                    if (type instanceof com.moulberry.flashback.keyframe.types.SpectateKeyframeType
+                        || type instanceof com.moulberry.flashback.keyframe.types.TimelapseKeyframeType) {
+                        // A spectate or timelapse object is a source in its own right, so it gets a
+                        // fresh id rather than joining whichever camera is active.
                         cameraId = java.util.UUID.randomUUID();
                     } else if (type == CameraKeyframeType.INSTANCE) {
                         // Adding a camera track IS adding a camera: it becomes a new viewpoint, not
@@ -2301,24 +2302,12 @@ public class TimelineWindow {
                         if (editorState.cameras == null) {
                             editorState.cameras = new ArrayList<>();
                         }
-
-                        // Unless the camera being worked on has no viewpoint yet, which is the case
-                        // when its first track was a sub-part such as a timelapse. Giving it a camera
-                        // track is what makes it usable, rather than leaving the sub-part attached to
-                        // a camera that can never be cut to.
-                        NamedCamera current = currentCamera(editorState);
-                        if (current != null && !sceneHasViewpointTrack(editorScene, current.id)) {
-                            cameraId = current.id;
-                        } else {
-                            NamedCamera camera = new NamedCamera(I18n.get("flashback.camera") + " " + (editorState.cameras.size() + 1));
-                            editorState.cameras.add(camera);
-                            editorState.activeCameraIndex = editorState.cameras.size() - 1;
-                            cameraId = camera.id;
-                        }
+                        NamedCamera camera = new NamedCamera(I18n.get("flashback.camera") + " " + (editorState.cameras.size() + 1));
+                        editorState.cameras.add(camera);
+                        editorState.activeCameraIndex = editorState.cameras.size() - 1;
+                        cameraId = camera.id;
                     } else if (NamedCamera.isCameraScopedId(type.id())) {
-                        // FOV, orbit, shake, entity-tracking and timelapse attach to the camera being
-                        // worked on. A timelapse is a sub-part of that camera: it runs only while the
-                        // camera is the output, rather than being a source to cut to.
+                        // FOV, orbit, shake and entity-tracking attach to the camera being worked on.
                         if (editorState.cameras == null) {
                             editorState.cameras = new ArrayList<>();
                         }
@@ -2326,7 +2315,8 @@ public class TimelineWindow {
                             editorState.cameras.add(new NamedCamera(I18n.get("flashback.camera") + " 1"));
                             editorState.activeCameraIndex = 0;
                         }
-                        cameraId = currentCamera(editorState).id;
+                        int active = Math.max(0, Math.min(editorState.cameras.size() - 1, editorState.activeCameraIndex));
+                        cameraId = editorState.cameras.get(active).id;
                     }
 
                     undo.add(new EditorSceneHistoryAction.RemoveTrack(type, index));
@@ -2343,28 +2333,6 @@ public class TimelineWindow {
             }
             ImGui.endPopup();
         }
-    }
-
-    /** The camera the editor is currently working on, or null if there is not one yet. */
-    private static @org.jetbrains.annotations.Nullable NamedCamera currentCamera(EditorState editorState) {
-        if (editorState.cameras == null || editorState.cameras.isEmpty()) {
-            return null;
-        }
-        int active = Math.max(0, Math.min(editorState.cameras.size() - 1, editorState.activeCameraIndex));
-        return editorState.cameras.get(active);
-    }
-
-    /**
-     * Whether the scene already contains a track that gives this camera a viewpoint. A camera whose
-     * only track is a sub-part (a timelapse) has none, and never appears in the camera switch.
-     */
-    private static boolean sceneHasViewpointTrack(EditorScene scene, java.util.UUID cameraId) {
-        for (KeyframeTrack track : scene.keyframeTracks) {
-            if (track != null && cameraId.equals(track.cameraId) && NamedCamera.isViewpointTrack(track)) {
-                return true;
-            }
-        }
-        return false;
     }
 
     private static void createNewKeyframe(int trackIndex, int tick, KeyframeType<?> keyframeType, KeyframeTrack keyframeTrack) {

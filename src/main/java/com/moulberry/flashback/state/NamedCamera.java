@@ -2,7 +2,6 @@ package com.moulberry.flashback.state;
 
 import com.google.gson.JsonObject;
 import com.moulberry.flashback.FlashbackGson;
-import com.moulberry.flashback.keyframe.types.TimelapseKeyframeType;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
@@ -16,12 +15,9 @@ import java.util.UUID;
  * a timeline, the way video tracks work in an editor. Previously a scene had a single set of tracks,
  * so "camera A then camera B" was not expressible.
  *
- * <p>Camera-scoped tracks live here; scene-scoped global tracks (time of day, weather, freeze,
- * block overrides, audio) stay on {@link EditorScene}, because those are properties of the world
- * rather than of a particular viewpoint and must not change when the camera cuts.
- *
- * <p>A timelapse is the one camera-scoped track that is not a viewpoint: it is a sub-part of its
- * camera, so it belongs to the camera and only runs while that camera is output.
+ * <p>Camera-scoped tracks live here; scene-scoped global tracks (time of day, weather, tick rate,
+ * freeze) stay on {@link EditorScene}, because those are properties of the world rather than of a
+ * particular viewpoint and must not change when the camera cuts.
  */
 public class NamedCamera {
 
@@ -29,7 +25,7 @@ public class NamedCamera {
     public UUID id = UUID.randomUUID();
     public String name;
 
-    /** Tracks belonging to this camera: position, orbit, FOV, roll, shake, timelapse. */
+    /** Tracks belonging to this camera: position, orbit, FOV, roll, shake. */
     public final List<KeyframeTrack> tracks = new ArrayList<>();
 
     public NamedCamera(String name) {
@@ -46,26 +42,14 @@ public class NamedCamera {
     }
 
     /**
-     * Camera-scoped track types. Everything else (time of day, weather, freeze, block overrides,
-     * audio) is a property of the scene and stays there.
-     *
-     * <p>A timelapse counts as camera-scoped even though it is not a viewpoint: it is a sub-part of
-     * the camera it was added under, and it only runs while that camera is the output.
+     * Camera-scoped track types. Everything else (time of day, weather, tick rate, freeze, block
+     * overrides, audio) is a property of the scene and stays there.
      */
     public static boolean isCameraScopedId(String id) {
         return switch (id) {
-            case "CAMERA", "CAMERA_ORBIT", "FOV", "CAMERA_SHAKE", "TRACK_ENTITY", "TIMELAPSE" -> true;
+            case "CAMERA", "CAMERA_ORBIT", "FOV", "CAMERA_SHAKE", "TRACK_ENTITY" -> true;
             default -> false;
         };
-    }
-
-    /**
-     * Whether this track is what gives a camera its viewpoint, as opposed to a sub-part hanging off
-     * it. Only viewpoint tracks make a camera show up as something the camera switch can cut to; a
-     * timelapse rides along with whichever camera owns it.
-     */
-    public static boolean isViewpointTrack(KeyframeTrack track) {
-        return isCameraScoped(track) && !(track.keyframeType instanceof TimelapseKeyframeType);
     }
 
     @Nullable

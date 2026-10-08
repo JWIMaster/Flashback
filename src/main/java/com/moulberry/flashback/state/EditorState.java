@@ -10,7 +10,6 @@ import com.moulberry.flashback.keyframe.impl.CameraSwitchKeyframe;
 import com.moulberry.flashback.keyframe.impl.SpectateKeyframe;
 import com.moulberry.flashback.keyframe.types.SpectateKeyframeType;
 import com.moulberry.flashback.keyframe.types.TimelapseKeyframeType;
-import com.moulberry.flashback.keyframe.types.CameraKeyframeType;
 import com.moulberry.flashback.keyframe.types.CameraSwitchKeyframeType;
 import com.moulberry.flashback.combo_options.GlowingOverride;
 import com.moulberry.flashback.configuration.FlashbackConfigV1;
@@ -64,7 +63,7 @@ public class EditorState {
      * an absent int at 0, so old files are detected without any explicit marker.
      */
     public int schemaVersion = 0;
-    public static final int CURRENT_SCHEMA_VERSION = 2;
+    public static final int CURRENT_SCHEMA_VERSION = 1;
 
     public double zoomMin = 0.0;
     public double zoomMax = 1.0;
@@ -345,18 +344,18 @@ public class EditorState {
     }
 
     /**
-     * True when this source id belongs to a spectate object rather than to a camera.
+     * True when this source id belongs to a non-camera object - a spectate or timelapse track.
      *
      * <p>Such a source owns the output itself: its own keyframes are applied rather than any camera
-     * tracks. A timelapse is NOT one of these - it is a sub-part of a camera, so it is applied as
-     * part of that camera.
+     * tracks. Cameras are the other case, and are the tracks sharing an id that are camera-scoped.
      */
     private boolean isNonCameraSource(UUID sourceId) {
         for (KeyframeTrack track : this.currentScene().keyframeTracks) {
             if (!sourceId.equals(track.cameraId)) {
                 continue;
             }
-            if (track.keyframeType instanceof SpectateKeyframeType) {
+            if (track.keyframeType instanceof SpectateKeyframeType
+                || track.keyframeType instanceof TimelapseKeyframeType) {
                 return true;
             }
         }
@@ -484,133 +483,8 @@ public class EditorState {
             this.activeCameraIndex = 0;
         }
 
-        if (this.schemaVersion < 2) {
-            int folded = 0;
-            for (EditorScene scene : this.scenes) {
-                if (scene == null || scene.keyframeTracks == null) {
-                    continue;
-                }
-                folded += this.foldTimelapseSourcesIntoCameras(scene);
-            }
-            if (folded > 0) {
-                Flashback.LOGGER.info("Attached {} standalone timelapse track(s) to a camera: a timelapse is now a part of the camera it is added under, rather than a viewpoint of its own", folded);
-            }
-        }
-
         this.schemaVersion = CURRENT_SCHEMA_VERSION;
         return true;
-    }
-
-    /**
-     * Attaches any timelapse that still owns its own source id to a camera.
-     *
-     * <p>A timelapse used to be a source in its own right, so it appeared in the camera switch beside
-     * the cameras. It is a sub-part of a camera now, so an old standalone one is hung off the camera
-     * that was being output where the timelapse starts, and any cut that named the old id is pointed
-     * at that camera. The timelapse covers the same stretch of timeline as before; only what it
-     * belongs to changes.
-     *
-     * @return how many timelapse tracks were attached
-     */
-    private int foldTimelapseSourcesIntoCameras(EditorScene scene) {
-        List<KeyframeTrack> tracks = scene.keyframeTracks;
-
-        Set<UUID> viewpointIds = new LinkedHashSet<>();
-        for (KeyframeTrack track : tracks) {
-            if (track != null && track.cameraId != null && NamedCamera.isViewpointTrack(track)) {
-                viewpointIds.add(track.cameraId);
-            }
-        }
-
-        List<KeyframeTrack> tracksToAdd = new ArrayList<>();
-        int folded = 0;
-        for (KeyframeTrack timelapseTrack : tracks) {
-            if (timelapseTrack == null || timelapseTrack.cameraId == null) {
-                continue;
-            }
-            if (!(timelapseTrack.keyframeType instanceof TimelapseKeyframeType)) {
-                continue;
-            }
-
-            UUID oldId = timelapseTrack.cameraId;
-            if (viewpointIds.contains(oldId)) {
-                continue; // Already hangs off a camera that has a viewpoint.
-            }
-
-            UUID cameraId = this.cameraOutputWhereTimelapseStarts(tracks, timelapseTrack, oldId, viewpointIds);
-            if (cameraId == null) {
-                // Nothing to attach it to, so give the scene the camera it would have had. It needs a
-                // viewpoint track as well: a camera that only owns a sub-part never appears in the
-                // camera switch, so the timelapse would never run.
-                NamedCamera camera = new NamedCamera("Camera " + (this.cameras.size() + 1));
-                this.cameras.add(camera);
-                cameraId = camera.id;
-                viewpointIds.add(cameraId);
-
-                KeyframeTrack cameraTrack = new KeyframeTrack(CameraKeyframeType.INSTANCE);
-                cameraTrack.cameraId = cameraId;
-                tracksToAdd.add(cameraTrack);
-            }
-
-            timelapseTrack.cameraId = cameraId;
-
-            for (KeyframeTrack switchTrack : tracks) {
-                if (switchTrack == null || switchTrack.keyframeType != CameraSwitchKeyframeType.INSTANCE) {
-                    continue;
-                }
-                for (Map.Entry<Integer, Keyframe> entry : switchTrack.keyframesByTick.entrySet()) {
-                    if (entry.getValue() instanceof CameraSwitchKeyframe switchKeyframe
-                        && switchKeyframe.source != null
-                        && oldId.equals(switchKeyframe.source.sourceId())) {
-                        entry.setValue(new CameraSwitchKeyframe(CameraSource.of(cameraId), switchKeyframe.interpolationType()));
-                    }
-                }
-            }
-
-            folded += 1;
-        }
-
-        tracks.addAll(tracksToAdd);
-        return folded;
-    }
-
-    /**
-     * The camera that was output where the timelapse begins, which is the camera the timelapse was
-     * written against. Null when the scene has no camera at all.
-     */
-    private @Nullable UUID cameraOutputWhereTimelapseStarts(List<KeyframeTrack> tracks, KeyframeTrack timelapseTrack,
-                                                            UUID oldId, Set<UUID> viewpointIds) {
-        if (!timelapseTrack.keyframesByTick.isEmpty()) {
-            int startTick = timelapseTrack.keyframesByTick.firstKey();
-
-            KeyframeTrack switchTrack = null;
-            for (KeyframeTrack track : tracks) {
-                if (track != null && track.keyframeType == CameraSwitchKeyframeType.INSTANCE) {
-                    switchTrack = track;
-                    break;
-                }
-            }
-
-            if (switchTrack != null) {
-                for (Map.Entry<Integer, Keyframe> entry : switchTrack.keyframesByTick.descendingMap().entrySet()) {
-                    if (entry.getKey() > startTick) {
-                        continue;
-                    }
-                    if (entry.getValue() instanceof CameraSwitchKeyframe switchKeyframe
-                        && switchKeyframe.source != null) {
-                        UUID sourceId = switchKeyframe.source.sourceId();
-                        if (sourceId != null && !sourceId.equals(oldId) && viewpointIds.contains(sourceId)) {
-                            return sourceId;
-                        }
-                    }
-                }
-            }
-        }
-
-        if (viewpointIds.isEmpty()) {
-            return null;
-        }
-        return viewpointIds.iterator().next();
     }
 
     public void applyKeyframes(KeyframeHandler keyframeHandler, float tick) {
