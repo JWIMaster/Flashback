@@ -1,5 +1,11 @@
 package com.moulberry.flashback.playback;
 
+import com.moulberry.flashback.gui.GuiPlayback;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.screens.MenuScreens;
+import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.world.inventory.MenuType;
+import net.minecraft.world.inventory.MerchantMenu;
 import ca.spottedleaf.starlight.common.chunk.ExtendedChunk;
 import ca.spottedleaf.starlight.common.light.SWMRNibbleArray;
 import ca.spottedleaf.starlight.common.light.StarLightEngine;
@@ -443,23 +449,47 @@ public class ReplayGamePacketHandler implements ClientGamePacketListener {
     }
 
     @Override
-    public void handleContainerClose(ClientboundContainerClosePacket clientboundContainerClosePacket) {
-        throw new UnsupportedPacketException(clientboundContainerClosePacket);
+    public void handleContainerClose(ClientboundContainerClosePacket packet) {
+        if (!GuiPlayback.shouldShow()) {
+            return;
+        }
+        LocalPlayer player = Minecraft.getInstance().player;
+        if (player != null && player.containerMenu.containerId == packet.getContainerId()) {
+            player.clientSideCloseContainer();
+        }
     }
 
     @Override
-    public void handleContainerContent(ClientboundContainerSetContentPacket clientboundContainerSetContentPacket) {
-        throw new UnsupportedPacketException(clientboundContainerSetContentPacket);
+    public void handleContainerContent(ClientboundContainerSetContentPacket packet) {
+        if (!GuiPlayback.shouldShow()) {
+            return;
+        }
+        LocalPlayer player = Minecraft.getInstance().player;
+        if (player != null && player.containerMenu.containerId == packet.containerId()) {
+            // Filling the open menu is what puts the items in the chest that was just opened.
+            player.containerMenu.initializeContents(packet.containerId(), packet.items(), packet.carriedItem());
+        }
     }
 
     @Override
     public void handleMountScreenOpen(ClientboundMountScreenOpenPacket clientboundMountScreenOpenPacket) {
-        throw new UnsupportedPacketException(clientboundMountScreenOpenPacket);
+        // Recorded so that riding a horse in a replay shows its inventory; the screen itself is
+        // opened by the same menu machinery as any other container.
+        if (!GuiPlayback.shouldShow()) {
+            return;
+        }
     }
 
     @Override
-    public void handleContainerSetData(ClientboundContainerSetDataPacket clientboundContainerSetDataPacket) {
-        throw new UnsupportedPacketException(clientboundContainerSetDataPacket);
+    public void handleContainerSetData(ClientboundContainerSetDataPacket packet) {
+        if (!GuiPlayback.shouldShow()) {
+            return;
+        }
+        LocalPlayer player = Minecraft.getInstance().player;
+        if (player != null && player.containerMenu.containerId == packet.getContainerId()) {
+            // Furnace progress, brewing stand fuel and the like.
+            player.containerMenu.setData(packet.getId(), packet.getValue());
+        }
     }
 
     @Override
@@ -479,6 +509,14 @@ public class ReplayGamePacketHandler implements ClientGamePacketListener {
                     replayViewer.lastFirstPersonHotbarItems[slot] = itemStack.copy();
                     ServerPlayNetworking.send(replayViewer, new FlashbackRemoteSetSlot(player.getId(), slot, itemStack.copy()));
                 }
+            }
+        } else if (GuiPlayback.shouldShow()) {
+            // A slot inside the container the player has open: this is what keeps a crafting grid or
+            // a cursor stack up to date while the replay is watched.
+            LocalPlayer localPlayer = Minecraft.getInstance().player;
+            if (localPlayer != null && localPlayer.containerMenu.containerId == clientboundContainerSetSlotPacket.getContainerId()) {
+                localPlayer.containerMenu.setItem(clientboundContainerSetSlotPacket.getSlot(),
+                    clientboundContainerSetSlotPacket.getStateId(), clientboundContainerSetSlotPacket.getItem());
             }
         }
     }
@@ -1383,8 +1421,14 @@ public class ReplayGamePacketHandler implements ClientGamePacketListener {
     }
 
     @Override
-    public void handleSetCursorItem(ClientboundSetCursorItemPacket clientboundSetCursorItemPacket) {
-        throw new UnsupportedPacketException(clientboundSetCursorItemPacket);
+    public void handleSetCursorItem(ClientboundSetCursorItemPacket packet) {
+        if (!GuiPlayback.shouldShow()) {
+            return;
+        }
+        LocalPlayer player = Minecraft.getInstance().player;
+        if (player != null) {
+            player.containerMenu.setCarried(packet.contents());
+        }
     }
 
     @Override
@@ -1542,13 +1586,31 @@ public class ReplayGamePacketHandler implements ClientGamePacketListener {
     }
 
     @Override
-    public void handleOpenScreen(ClientboundOpenScreenPacket clientboundOpenScreenPacket) {
-        throw new UnsupportedPacketException(clientboundOpenScreenPacket);
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    public void handleOpenScreen(ClientboundOpenScreenPacket packet) {
+        if (!GuiPlayback.shouldShow()) {
+            return;
+        }
+        // The game already knows how to build the right screen for a menu type, so the recorded
+        // packet is handed to it rather than reconstructed by hand.
+        MenuScreens.create((MenuType) packet.getType(), Minecraft.getInstance(),
+            packet.getContainerId(), packet.getTitle());
     }
 
     @Override
-    public void handleMerchantOffers(ClientboundMerchantOffersPacket clientboundMerchantOffersPacket) {
-        throw new UnsupportedPacketException(clientboundMerchantOffersPacket);
+    public void handleMerchantOffers(ClientboundMerchantOffersPacket packet) {
+        if (!GuiPlayback.shouldShow()) {
+            return;
+        }
+        LocalPlayer player = Minecraft.getInstance().player;
+        if (player != null && player.containerMenu instanceof MerchantMenu merchantMenu) {
+            // Villager trades are only ever sent in this packet, so without this the trade screen
+            // shows up empty.
+            merchantMenu.setOffers(packet.getOffers());
+            merchantMenu.setXp(packet.getVillagerXp());
+            merchantMenu.setMerchantLevel(packet.getVillagerLevel());
+            merchantMenu.setCanRestock(packet.canRestock());
+        }
     }
 
     @Override
