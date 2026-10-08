@@ -372,7 +372,7 @@ public class VisualsWindow {
             scene.push(new EditorSceneHistoryEntry(
                 List.of(new EditorSceneHistoryAction.RemoveTrack(keyframeType, newKeyframeTrackIndex)),
                 List.of(
-                    new EditorSceneHistoryAction.AddTrack(keyframeType, newKeyframeTrackIndex, null),
+                    new EditorSceneHistoryAction.AddTrack(keyframeType, newKeyframeTrackIndex),
                     new EditorSceneHistoryAction.SetKeyframe(keyframeType, newKeyframeTrackIndex, replayServer.getReplayTick(), keyframe)
                 ),
                 description

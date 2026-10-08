@@ -14,8 +14,7 @@ public record MinecraftKeyframeHandler(Minecraft minecraft) implements KeyframeH
 
     private static final Set<Class<? extends KeyframeChange>> supportedChanges = Set.of(
             KeyframeChangeCameraPosition.class, KeyframeChangeCameraPositionOrbit.class, KeyframeChangeTrackEntity.class,
-            KeyframeChangeFov.class, KeyframeChangeTimeOfDay.class, KeyframeChangeCameraShake.class,
-            KeyframeChangeCameraSwitch.class, KeyframeChangeSpectate.class
+            KeyframeChangeFov.class, KeyframeChangeTimeOfDay.class, KeyframeChangeCameraShake.class
     );
 
     @Override
@@ -29,38 +28,11 @@ public record MinecraftKeyframeHandler(Minecraft minecraft) implements KeyframeH
     }
 
     @Override
-    public void applySpectate(java.util.UUID target) {
-        LocalPlayer player = this.minecraft.player;
-        if (player == null) {
-            return;
-        }
-        if (target == null) {
-            // Back to the replay's own viewpoint.
-            if (this.minecraft.getCameraEntity() != player) {
-                this.minecraft.setCameraEntity(player);
-            }
-            return;
-        }
-        if (this.minecraft.level == null) {
-            return;
-        }
-        // An unknown UUID (a player who left the recording) must not throw mid-export.
-        net.minecraft.world.entity.Entity entity = this.minecraft.level.getEntities().get(target);
-        if (entity != null) {
-            this.minecraft.setCameraEntity(entity);
-        }
-    }
-
-    @Override
     public void applyCameraPosition(Vector3d position, double yaw, double pitch, double roll) {
         LocalPlayer player = this.minecraft.player;
         if (player != null) {
-            // Leave any spectated entity directly rather than by sending the /spectate command.
-            // The command needs a server round-trip, and an export advances the server by hand on a
-            // frozen tick, so the command was often never processed - which is why switching from a
-            // spectated player back to a camera did not take effect.
             if (this.minecraft.getCameraEntity() != this.minecraft.player) {
-                this.minecraft.setCameraEntity(this.minecraft.player);
+                Minecraft.getInstance().getConnection().sendCommand("spectate");
             }
 
             player.snapTo(position.x, position.y, position.z, (float) yaw, (float) pitch);

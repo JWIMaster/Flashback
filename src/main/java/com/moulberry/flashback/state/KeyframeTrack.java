@@ -24,14 +24,6 @@ public class KeyframeTrack {
     public final KeyframeType<?> keyframeType;
     public TreeMap<Integer, Keyframe> keyframesByTick = new TreeMap<>();
     public boolean enabled = true;
-    /**
-     * The camera this track belongs to, or null for a scene-scoped track.
-     *
-     * <p>Camera tracks live in the scene's own track list like any other track, so they appear as
-     * ordinary timeline rows and can be reordered and keyframed directly. The id is what the camera
-     * switch selects between; it is not a separate container.
-     */
-    public java.util.UUID cameraId = null;
     public String customName = null;
     public int customColour = 0;
 
@@ -41,19 +33,6 @@ public class KeyframeTrack {
 
     public KeyframeTrack(KeyframeType<?> keyframeType) {
         this.keyframeType = keyframeType;
-    }
-
-    /** Deep copy of the track and its keyframes, preserving name, colour and enabled state. */
-    public KeyframeTrack copy() {
-        KeyframeTrack copy = new KeyframeTrack(this.keyframeType);
-        copy.enabled = this.enabled;
-        copy.cameraId = this.cameraId;
-        copy.customName = this.customName;
-        copy.customColour = this.customColour;
-        for (Map.Entry<Integer, Keyframe> entry : this.keyframesByTick.entrySet()) {
-            copy.keyframesByTick.put(entry.getKey(), entry.getValue().copy());
-        }
-        return copy;
     }
 
     @Nullable

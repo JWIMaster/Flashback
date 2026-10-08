@@ -176,12 +176,6 @@ public class Flashback implements ModInitializer, ClientModInitializer {
         InputConstants.Type.KEYBOARD, InputConstants.UNKNOWN.getValue(), category));
     public static final KeyMapping createMarker4KeyBind = KeyMappingHelper.registerKeyMapping(new KeyMapping("flashback.keybind.create_marker_4",
         InputConstants.Type.KEYBOARD, InputConstants.UNKNOWN.getValue(), category));
-    /**
-     * Leaves a spectated entity and returns to the replay's own viewpoint. Bound to M by default.
-     * Without this there was no quick way out of a spectate once you were in one.
-     */
-    public static final KeyMapping stopSpectatingKeyBind = KeyMappingHelper.registerKeyMapping(new KeyMapping("flashback.keybind.stop_spectating",
-        InputConstants.Type.KEYBOARD, InputConstants.KEY_M, category));
 
     public static final Identifier RECORDING_INFO_DEBUG_SCREEN_ID = createIdentifier("recording_info");
 
@@ -296,8 +290,6 @@ public class Flashback implements ModInitializer, ClientModInitializer {
         KeyframeRegistry.register(TrackEntityKeyframeType.INSTANCE);
         KeyframeRegistry.register(CameraShakeKeyframeType.INSTANCE);
         KeyframeRegistry.register(FOVKeyframeType.INSTANCE);
-        KeyframeRegistry.register(CameraSwitchKeyframeType.INSTANCE);
-        KeyframeRegistry.register(SpectateKeyframeType.INSTANCE);
         KeyframeRegistry.register(SpeedKeyframeType.INSTANCE);
         KeyframeRegistry.register(TimelapseKeyframeType.INSTANCE);
         KeyframeRegistry.register(TimeOfDayKeyframeType.INSTANCE);
@@ -633,15 +625,6 @@ public class Flashback implements ModInitializer, ClientModInitializer {
             }
             if (createMarker4KeyBind.consumeClick()) {
                 addMarker(Flashback.config.marker.markerOptions4);
-            }
-
-            // Direct camera-entity change rather than the /spectate command: the command needs a
-            // server round-trip and may never be processed while the replay is stepping ticks.
-            if (stopSpectatingKeyBind.consumeClick()) {
-                Minecraft client = Minecraft.getInstance();
-                if (client.player != null && client.getCameraEntity() != client.player) {
-                    client.setCameraEntity(client.player);
-                }
             }
         });
 

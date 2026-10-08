@@ -47,7 +47,7 @@ public record SavedTrack(KeyframeType<?> type, int track, boolean copiedFromDisa
 
         if (existing == null) {
             undo.add(new EditorSceneHistoryAction.RemoveTrack(this.type, trackIndex));
-            redo.add(new EditorSceneHistoryAction.AddTrack(this.type, trackIndex, null));
+            redo.add(new EditorSceneHistoryAction.AddTrack(this.type, trackIndex));
         }
 
         int count = 0;

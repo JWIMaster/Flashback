@@ -42,8 +42,6 @@ public class FlashbackGson {
             .registerTypeAdapter(FreezeKeyframe.class, new FreezeKeyframe.TypeAdapter())
             .registerTypeAdapter(BlockOverrideKeyframe.class, new BlockOverrideKeyframe.TypeAdapter())
             .registerTypeAdapter(AudioKeyframe.class, new AudioKeyframe.TypeAdapter())
-            .registerTypeAdapter(CameraSwitchKeyframe.class, new CameraSwitchKeyframe.TypeAdapter())
-            .registerTypeAdapter(SpectateKeyframe.class, new SpectateKeyframe.TypeAdapter())
             .registerTypeAdapter(Keyframe.class, new Keyframe.TypeAdapter())
 
             .registerTypeAdapter(EditorSceneHistoryAction.SetKeyframe.class, new EditorSceneHistoryAction.SetKeyframe.TypeAdapter())
