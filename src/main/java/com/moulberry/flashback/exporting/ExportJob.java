@@ -55,7 +55,6 @@ import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.phys.Vec3;
 import org.joml.Matrix4f;
 import org.joml.Vector4f;
-import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.openal.SOFTLoopback;
 
 import java.io.IOException;
