@@ -13,9 +13,11 @@ import com.moulberry.flashback.keyframe.KeyframeType;
 import com.moulberry.flashback.keyframe.KeyframeRegistry;
 import com.moulberry.flashback.keyframe.handler.MinecraftKeyframeHandler;
 import com.moulberry.flashback.keyframe.impl.CameraOrbitKeyframe;
+import com.moulberry.flashback.keyframe.impl.CameraSwitchKeyframe;
 import com.moulberry.flashback.keyframe.types.CameraKeyframeType;
 import com.moulberry.flashback.keyframe.types.TimelapseKeyframeType;
 import com.moulberry.flashback.record.ReplayMarker;
+import com.moulberry.flashback.state.EditorCamera;
 import com.moulberry.flashback.state.EditorScene;
 import com.moulberry.flashback.state.EditorSceneHistoryAction;
 import com.moulberry.flashback.state.EditorSceneHistoryEntry;
@@ -80,7 +82,9 @@ public class TimelineWindow {
     private static int grabbedKeyframeTick = 0;
     private static int grabbedKeyframeTrack = 0;
     private static int draggingMouseButton = ImGuiMouseButton.Left;
-    private static int repositioningKeyframeTrack = 0;
+    /** Visual row being dragged to a new position, or -1. Rows, not track indices, because the
+     * left-hand side shows a camera row for every camera in addition to the tracks. */
+    private static int repositioningKeyframeRow = -1;
     private static float dragStartMouseX = 0;
     private static float dragStartMouseY = 0;
 
@@ -138,6 +142,35 @@ public class TimelineWindow {
     private static int editingKeyframeTrack = 0;
     private static int editingKeyframeTick = 0;
 
+    /**
+     * The vertical layout of the left-hand side, rebuilt every frame from the scene.
+     *
+     * <p>The scene's tracks are one ordered list, but the timeline shows camera-owned tracks grouped
+     * under a row for the camera that owns them. Deriving that grouping in one place - rather than
+     * repeating "walk the list and add a row per camera" in the hit test, the drag code and the
+     * renderer - is what keeps the drawn rows and the interactive rows the same thing.
+     */
+    private static final List<TimelineRow> timelineRows = new ArrayList<>();
+
+    private record TimelineRow(@Nullable KeyframeTrack track, @Nullable EditorCamera cameraHeader) {
+        static TimelineRow ofTrack(KeyframeTrack track) {
+            return new TimelineRow(track, null);
+        }
+
+        static TimelineRow ofCamera(EditorCamera camera) {
+            return new TimelineRow(null, camera);
+        }
+
+        boolean isCameraHeader() {
+            return this.cameraHeader != null;
+        }
+
+        /** Camera-owned tracks are indented and shown beneath their camera's row. */
+        boolean isCameraChild() {
+            return this.track != null && this.track.cameraId != null;
+        }
+    }
+
     private static int createKeyframeAtTick = 0;
     private static int openCreateKeyframeAtTickTrack = -1;
 
@@ -190,6 +223,10 @@ public class TimelineWindow {
     private static void renderInner(ReplayServer replayServer, FlashbackMeta metadata) {
         ImDrawList drawList = ImGui.getWindowDrawList();
 
+        // The left-hand rows are derived from the scene once per frame, so the drawn rows and the
+        // rows that hit-testing and dragging use can never disagree.
+        rebuildTimelineRows();
+
         float maxX = ImGui.getWindowContentRegionMaxX();
         float maxY = ImGui.getWindowContentRegionMaxY();
         float minX = ImGui.getWindowContentRegionMinX();
@@ -207,7 +244,7 @@ public class TimelineWindow {
         middleX = ReplayUI.scaleUi(240);
         keyframeSize = ReplayUI.scaleUi(10);
 
-        float totalTrackHeight = (editorScene.keyframeTracks.size() + 1) * (ImGui.getTextLineHeightWithSpacing() + ImGui.getStyle().getItemSpacingY());
+        float totalTrackHeight = (timelineRows.size() + 1) * (ImGui.getTextLineHeightWithSpacing() + ImGui.getStyle().getItemSpacingY());
         boolean showTrackScroll = totalTrackHeight > height - middleY;
 
         if (showTrackScroll) {
@@ -590,42 +627,34 @@ public class TimelineWindow {
                 dragStartMouseX = mouseX;
                 dragStartMouseY = mouseY;
             } else if (ImGui.isMouseDragging(draggingMouseButton)) {
-                if (repositioningKeyframeTrack >= 0 && repositioningKeyframeTrack < editorScene.keyframeTracks.size()) {
-                    float lineHeight = ImGui.getTextLineHeightWithSpacing() + ImGui.getStyle().getItemSpacingY();
+                if (repositioningKeyframeRow >= 0 && repositioningKeyframeRow < timelineRows.size()) {
+                    float lineHeight = rowHeight();
 
                     float mouseDeltaY = mouseY - dragStartMouseY;
-                    if (mouseDeltaY > lineHeight/2) {
-                        if (repositioningKeyframeTrack < editorScene.keyframeTracks.size()-1) {
-                            selectedKeyframesList.clear();
-                            editingKeyframeTrack = -1;
-                            editingKeyframeTick = -1;
+                    if (Math.abs(mouseDeltaY) > lineHeight / 2) {
+                        int direction = mouseDeltaY > 0 ? 1 : -1;
+                        int targetRow = repositioningKeyframeRow + direction;
+                        if (targetRow >= 0 && targetRow < timelineRows.size()) {
+                            int fromTrack = trackIndexAt(repositioningKeyframeRow);
+                            int toTrack = trackIndexAt(targetRow);
+                            if (canReorder(fromTrack, toTrack)) {
+                                selectedKeyframesList.clear();
+                                editingKeyframeTrack = -1;
+                                editingKeyframeTick = -1;
 
-                            dragStartMouseY += lineHeight;
+                                dragStartMouseY += direction * lineHeight;
 
-                            upgradeToSceneWrite();
+                                upgradeToSceneWrite();
 
-                            if (repositioningKeyframeTrack < editorScene.keyframeTracks.size()-1) {
-                                var track = editorScene.keyframeTracks.remove(repositioningKeyframeTrack);
-                                editorScene.keyframeTracks.get(repositioningKeyframeTrack).animatedOffsetInUi += lineHeight;
-                                repositioningKeyframeTrack += 1;
-                                editorScene.keyframeTracks.add(repositioningKeyframeTrack, track);
-                            }
-                        }
-                    } else if (mouseDeltaY < -lineHeight/2) {
-                        if (repositioningKeyframeTrack > 0) {
-                            selectedKeyframesList.clear();
-                            editingKeyframeTrack = -1;
-                            editingKeyframeTick = -1;
+                                // Swap the two tracks in the scene's list; the next frame's rows
+                                // follow, so the drag moves a row one step at a time.
+                                KeyframeTrack from = editorScene.keyframeTracks.get(fromTrack);
+                                KeyframeTrack to = editorScene.keyframeTracks.get(toTrack);
+                                editorScene.keyframeTracks.set(fromTrack, to);
+                                editorScene.keyframeTracks.set(toTrack, from);
 
-                            dragStartMouseY -= lineHeight;
-
-                            upgradeToSceneWrite();
-
-                            if (repositioningKeyframeTrack > 0) {
-                                var track = editorScene.keyframeTracks.remove(repositioningKeyframeTrack);
-                                repositioningKeyframeTrack -= 1;
-                                editorScene.keyframeTracks.get(repositioningKeyframeTrack).animatedOffsetInUi -= lineHeight;
-                                editorScene.keyframeTracks.add(repositioningKeyframeTrack, track);
+                                repositioningKeyframeRow = targetRow;
+                                rebuildTimelineRows();
                             }
                         }
                     }
@@ -725,6 +754,126 @@ public class TimelineWindow {
         }
     }
 
+    /**
+     * Rebuilds the visual rows from the scene.
+     *
+     * <p>The switch lane comes first, then each camera with the tracks it owns, then the scene-wide
+     * tracks - the order the underlying list is kept in. A collapsed camera shows only its own row,
+     * which is the point of collapsing it. Rows are found by identity rather than assumed index, so
+     * a camera whose rows are out of order still groups correctly.
+     */
+    private static void rebuildTimelineRows() {
+        timelineRows.clear();
+
+        KeyframeTrack switchTrack = editorScene.cameraSwitchTrack();
+        if (switchTrack != null) {
+            timelineRows.add(TimelineRow.ofTrack(switchTrack));
+        }
+
+        for (EditorScene.CameraBlock block : editorScene.cameraBlocks()) {
+            timelineRows.add(TimelineRow.ofCamera(block.camera()));
+            if (block.camera().collapsed) {
+                continue;
+            }
+            for (KeyframeTrack track : block.tracks()) {
+                timelineRows.add(TimelineRow.ofTrack(track));
+            }
+        }
+
+        for (KeyframeTrack track : editorScene.keyframeTracks) {
+            if (track == switchTrack || track.cameraId != null) {
+                continue;
+            }
+            timelineRows.add(TimelineRow.ofTrack(track));
+        }
+    }
+
+    /**
+     * The vertical offset of a row in the track area, or -1 when the row does not exist.
+     *
+     * <p>This is the single definition of where a row sits. The renderer positions rows with the
+     * same value, so a click can never land on a different row than the one drawn.
+     */
+    private static float rowOffsetOf(int rowIndex) {
+        if (rowIndex < 0 || rowIndex >= timelineRows.size()) {
+            return -1;
+        }
+        return rowIndex * rowHeight();
+    }
+
+    private static float rowHeight() {
+        return ImGui.getTextLineHeightWithSpacing() + ImGui.getStyle().getItemSpacingY();
+    }
+
+    /**
+     * The top of a row in screen space.
+     *
+     * <p>The one definition of where a row starts: both the renderer and the hit test use it, so a
+     * click can never land on a different row than the one under the cursor.
+     */
+    private static float rowTop(float contentY, int rowIndex) {
+        return contentY + 6 + rowIndex * rowHeight();
+    }
+
+    /** The row a screen position is over, or -1 when it is outside the track area. */
+    private static int rowIndexAt(float screenY, float contentY) {
+        if (timelineRows.isEmpty()) {
+            return -1;
+        }
+        int index = (int) Math.floor((screenY - rowTop(contentY, 0)) / rowHeight());
+        if (index < 0 || index >= timelineRows.size()) {
+            return -1;
+        }
+        return index;
+    }
+
+    /** The track index a visual row refers to, or -1 for a camera header. */
+    private static int trackIndexAt(int rowIndex) {
+        if (rowIndex < 0 || rowIndex >= timelineRows.size()) {
+            return -1;
+        }
+        KeyframeTrack track = timelineRows.get(rowIndex).track();
+        if (track == null) {
+            return -1;
+        }
+        return editorScene.keyframeTracks.indexOf(track);
+    }
+
+    private static int rowIndexOfTrack(int trackIndex) {
+        if (trackIndex < 0 || trackIndex >= editorScene.keyframeTracks.size()) {
+            return -1;
+        }
+        KeyframeTrack track = editorScene.keyframeTracks.get(trackIndex);
+        for (int i = 0; i < timelineRows.size(); i++) {
+            if (timelineRows.get(i).track() == track) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * Whether two tracks may swap places.
+     *
+     * <p>Only rows in the same group move past each other: a camera's child cannot be dragged out of
+     * its camera into another one, and a scene track cannot be dragged into a camera. That keeps the
+     * grouping the timeline draws a property of the data rather than something the drag can break.
+     */
+    private static boolean canReorder(int trackIndexA, int trackIndexB) {
+        if (trackIndexA < 0 || trackIndexB < 0
+                || trackIndexA >= editorScene.keyframeTracks.size()
+                || trackIndexB >= editorScene.keyframeTracks.size()) {
+            return false;
+        }
+        UUID ownerA = editorScene.keyframeTracks.get(trackIndexA).cameraId;
+        UUID ownerB = editorScene.keyframeTracks.get(trackIndexB).cameraId;
+        return Objects.equals(ownerA, ownerB);
+    }
+
+    /** The scene track that a new camera's rows should sit before, or -1 to append. */
+    private static int cameraBlockInsertionIndex(EditorCamera camera) {
+        return editorScene.insertionIndexForTrackOf(camera);
+    }
     private static int findClosestKeyframeForSnap(int tick) {
         int closestTick = -1;
         for (KeyframeTrack track : editorScene.keyframeTracks) {
@@ -939,51 +1088,75 @@ public class TimelineWindow {
 
             upgradeToSceneWrite();
 
-            int trackIndex = findOrCreateCameraTrack();
-
-            editorScene.setKeyframe(trackIndex, cursorTicks, CameraKeyframeType.INSTANCE.createDirect());
-            editorState.markDirty();
-
-            lastKeyframeTrackCameraWasAddedTo = editorScene.keyframeTracks.get(trackIndex);
+            addCameraPositionKeyframe(cursorTicks);
         }
     }
 
-    private static KeyframeTrack lastKeyframeTrackCameraWasAddedTo = null;
+    /**
+     * Adds a camera-position keyframe at {@code tick} to the camera being worked on.
+     *
+     * <p>"Being worked on" is the camera output at the cursor, so pressing the key while a camera is
+     * live extends that camera's movement rather than silently starting a second one. With no camera
+     * at all, one is created, because the user has clearly asked to animate a camera.
+     */
+    private static void addCameraPositionKeyframe(int tick) {
+        EditorCamera camera = activeCameraForEditing();
+        if (camera == null) {
+            return;
+        }
 
-    private static int findOrCreateCameraTrack() {
-        if (lastKeyframeTrackCameraWasAddedTo != null) {
-            int lastCameraAddedIndex = editorScene.keyframeTracks.indexOf(lastKeyframeTrackCameraWasAddedTo);
-            if (lastCameraAddedIndex >= 0) {
-                return lastCameraAddedIndex;
+        KeyframeTrack track = cameraTrackOfType(camera, CameraKeyframeType.INSTANCE);
+        if (track == null) {
+            // The camera exists but has no position lane yet (a spectate camera, or a camera whose
+            // lane was deleted); give it one so the keyframe has somewhere to live.
+            if (!camera.canOwn(CameraKeyframeType.INSTANCE)) {
+                ReplayUI.setInfoOverlayShort(I18n.get("flashback.camera_has_no_position_track", editorScene.displayNameOf(camera)));
+                return;
+            }
+            int index = editorScene.insertionIndexForTrackOf(camera);
+            editorScene.push(new EditorSceneHistoryEntry(
+                List.of(new EditorSceneHistoryAction.RemoveTrack(CameraKeyframeType.INSTANCE, index)),
+                List.of(new EditorSceneHistoryAction.AddTrack(CameraKeyframeType.INSTANCE, index, camera.id)),
+                I18n.get("flashback.create_named_track", CameraKeyframeType.INSTANCE.name())));
+            track = editorScene.keyframeTracks.get(index);
+        }
+
+        Keyframe keyframe = CameraKeyframeType.INSTANCE.createDirect();
+        if (keyframe == null) {
+            return;
+        }
+
+        int trackIndex = editorScene.keyframeTracks.indexOf(track);
+        if (trackIndex >= 0) {
+            editorScene.setKeyframe(trackIndex, tick, keyframe);
+            editorState.markDirty();
+            rebuildTimelineRows();
+        }
+    }
+
+    /** The camera the editor is working on: the one output at the cursor, else the first one. */
+    @Nullable
+    private static EditorCamera activeCameraForEditing() {
+        EditorCamera active = editorScene.resolveCameraAt(cursorTicks);
+        if (active != null) {
+            return active;
+        }
+        if (!editorScene.cameras.isEmpty()) {
+            return editorScene.cameras.get(0);
+        }
+        // Nothing to animate yet, so make a camera and cut to it.
+        addCamera(EditorCamera.Kind.FREE, cursorTicks);
+        return editorScene.cameras.isEmpty() ? null : editorScene.cameras.get(0);
+    }
+
+    @Nullable
+    private static KeyframeTrack cameraTrackOfType(EditorCamera camera, KeyframeType<?> type) {
+        for (KeyframeTrack track : editorScene.keyframeTracks) {
+            if (camera.id.equals(track.cameraId) && track.keyframeType == type) {
+                return track;
             }
         }
-
-        int disabledIndex = -1;
-
-        for (int i = 0; i < editorScene.keyframeTracks.size(); i++) {
-            KeyframeTrack track = editorScene.keyframeTracks.get(i);
-            if (track.keyframeType == CameraKeyframeType.INSTANCE) {
-                if (track.enabled) {
-                    return i;
-                } else {
-                    disabledIndex = i;
-                }
-            }
-        }
-
-        if (disabledIndex >= 0) {
-            return disabledIndex;
-        }
-
-        int index = editorScene.keyframeTracks.size();
-
-        editorScene.push(new EditorSceneHistoryEntry(
-            List.of(new EditorSceneHistoryAction.RemoveTrack(CameraKeyframeType.INSTANCE, index)),
-            List.of(new EditorSceneHistoryAction.AddTrack(CameraKeyframeType.INSTANCE, index)),
-            I18n.get("flashback.create_named_track", CameraKeyframeType.INSTANCE.name())));
-        editorState.markDirty();
-
-        return index;
+        return null;
     }
 
     private static void performCopy(int totalTicks, boolean relativePosition, boolean relativeYaw, boolean relativePitch) {
@@ -1008,7 +1181,8 @@ public class TimelineWindow {
                 keyframes.put(tick - minTick, keyframe);
             }
 
-            tracks.add(new SavedTrack(selectedKeyframes.type(), selectedKeyframes.trackIndex(), !keyframeTrack.enabled, keyframes));
+            tracks.add(new SavedTrack(selectedKeyframes.type(), selectedKeyframes.trackIndex(),
+                !keyframeTrack.enabled, keyframeTrack.cameraId, keyframes));
         }
 
         LocalPlayer p = Minecraft.getInstance().player;
@@ -1179,11 +1353,10 @@ public class TimelineWindow {
 
         // Tracks
         if (mouseY > y + middleY && mouseY < y + height && mouseX > x + middleX && mouseX < x + width) {
-            float lineHeight = ImGui.getTextLineHeightWithSpacing() + ImGui.getStyle().getItemSpacingY();
+            int rowIndex = rowIndexAt(mouseY, contentY);
+            int trackIndex = trackIndexAt(rowIndex);
 
-            int trackIndex = (int) Math.max(0, Math.floor((mouseY - (contentY + 2))/lineHeight));
-
-            if (trackIndex >= 0 && trackIndex < editorScene.keyframeTracks.size()) {
+            if (trackIndex >= 0) {
                 KeyframeTrack keyframeTrack = editorScene.keyframeTracks.get(trackIndex);
 
                 int tick = timelineXToReplayTick(mouseX - x);
@@ -1438,6 +1611,18 @@ public class TimelineWindow {
             }
         }
 
+        // Previewing a cut shows that camera's viewpoint here without recording a switch, which is
+        // how you can check what a cut looks like before committing to it.
+        if (!multiple && editingKeyframe instanceof CameraSwitchKeyframe cameraSwitchKeyframe) {
+            ImGui.sameLine();
+            if (ImGui.button(I18n.get("flashback.preview"))) {
+                EditorCamera camera = editorScene.resolveCamera(cameraSwitchKeyframe.cameraId);
+                if (camera != null) {
+                    editorState.previewCamera(camera, cursorTicks);
+                }
+            }
+        }
+
         if (editingKeyframe instanceof CameraKeyframe || editingKeyframe instanceof CameraOrbitKeyframe) {
             if (ImGui.button(I18n.get("flashback.copy_relative") + "##CopyRelative")) {
                 ImGui.openPopup("##CopyOptions");
@@ -1471,7 +1656,7 @@ public class TimelineWindow {
 
         if (!ImGui.isAnyMouseDown()) {
             trackDisabledButtonDrag = false;
-            repositioningKeyframeTrack = -1;
+            repositioningKeyframeRow = -1;
         }
 
         if (dragSelectOrigin != null) {
@@ -1480,13 +1665,18 @@ public class TimelineWindow {
             float dragMaxX = Math.max(dragSelectOrigin.x, mouseX);
             float dragMaxY = Math.max(dragSelectOrigin.y, mouseY);
 
-            float lineHeight = ImGui.getTextLineHeightWithSpacing() + ImGui.getStyle().getItemSpacingY();
-            int minTrackIndex = (int) Math.floor((dragMinY - (contentY + 2))/lineHeight);
-            int maxTrackIndex = (int) Math.floor((dragMaxY - (contentY + 2))/lineHeight);
-            minTrackIndex = Math.max(0, minTrackIndex);
-            maxTrackIndex = Math.min(editorScene.keyframeTracks.size()-1, maxTrackIndex);
+            float lineHeight = rowHeight();
+            int minRowIndex = (int) Math.floor((dragMinY - rowTop(contentY, 0))/lineHeight);
+            int maxRowIndex = (int) Math.floor((dragMaxY - rowTop(contentY, 0))/lineHeight);
+            minRowIndex = Math.max(0, minRowIndex);
+            maxRowIndex = Math.min(timelineRows.size()-1, maxRowIndex);
 
-            for (int trackIndex = minTrackIndex; trackIndex <= maxTrackIndex; trackIndex++) {
+            for (int rowIndex = minRowIndex; rowIndex <= maxRowIndex; rowIndex++) {
+                // A camera's own row has no keyframes, so a selection never covers it.
+                int trackIndex = trackIndexAt(rowIndex);
+                if (trackIndex < 0) {
+                    continue;
+                }
                 KeyframeTrack keyframeTrack = editorScene.keyframeTracks.get(trackIndex);
 
                 int minTick = timelineXToReplayTick(dragMinX - keyframeSize);
@@ -1728,8 +1918,20 @@ public class TimelineWindow {
         float minTimelineX = x + middleX;
         float maxTimelineX = x + width;
 
-        for (int trackIndex = 0; trackIndex < editorScene.keyframeTracks.size(); trackIndex++) {
-            KeyframeTrack keyframeTrack = editorScene.keyframeTracks.get(trackIndex);
+        for (int rowIndex = 0; rowIndex < timelineRows.size(); rowIndex++) {
+            TimelineRow row = timelineRows.get(rowIndex);
+            if (row.isCameraHeader()) {
+                // A camera's own row carries no keyframes; only the rows it owns do.
+                continue;
+            }
+            KeyframeTrack keyframeTrack = row.track();
+            if (keyframeTrack == null) {
+                continue;
+            }
+            int trackIndex = trackIndexAt(rowIndex);
+            if (trackIndex < 0) {
+                continue;
+            }
 
             TreeMap<Integer, Keyframe> keyframeTimes = keyframeTrack.keyframesByTick;
 
@@ -1756,7 +1958,7 @@ public class TimelineWindow {
 
                 Keyframe keyframe = entry.getValue();
 
-                float midY = y + 2 + (trackIndex+0.5f) * lineHeight;
+                float midY = rowTop(y, rowIndex) + lineHeight / 2;
 
                 if (selectedKeyframesForTrack != null && selectedKeyframesForTrack.keyframeTicks().contains(tick)) {
                     int newTick = tick;
@@ -1866,7 +2068,7 @@ public class TimelineWindow {
 
     private static void renderKeyframeElements(float x, float y, int cursorTicks, int middleX) {
         ImGui.setCursorScreenPos(x + 8, y + 6);
-        float lineHeight = ImGui.getTextLineHeightWithSpacing() + ImGui.getStyle().getItemSpacingY();
+        float lineHeight = rowHeight();
 
         int keyframeTrackToDelete = -1;
         int keyframeTrackToClear = -1;
@@ -1880,8 +2082,20 @@ public class TimelineWindow {
 
         double animationMultiplier = Math.pow(0.9D, renderDeltaNanos / 10_000_000D);
 
-        for (int trackIndex = 0; trackIndex < editorScene.keyframeTracks.size(); trackIndex++) {
-            KeyframeTrack keyframeTrack = editorScene.keyframeTracks.get(trackIndex);
+        for (int rowIndex = 0; rowIndex < timelineRows.size(); rowIndex++) {
+            TimelineRow row = timelineRows.get(rowIndex);
+
+            if (row.isCameraHeader()) {
+                renderCameraHeaderRow(x, y, middleX, rowIndex, row.cameraHeader(), drawList, buttonSize, spacingX);
+                continue;
+            }
+
+            KeyframeTrack keyframeTrack = row.track();
+            int trackIndex = trackIndexAt(rowIndex);
+            if (keyframeTrack == null || trackIndex < 0) {
+                continue;
+            }
+
             KeyframeType<?> keyframeType = keyframeTrack.keyframeType;
 
             ImGui.pushID(trackIndex);
@@ -1917,28 +2131,34 @@ public class TimelineWindow {
                 keyframeTrack.animatedOffsetInUi = 0;
             }
 
-            float trackOffset = repositioningKeyframeTrack == trackIndex ? mouseY - dragStartMouseY : (int) keyframeTrack.animatedOffsetInUi;
-            ImGui.setCursorPosX(repositioningKeyframeTrack == trackIndex ? 3 : 2);
-            ImGui.setCursorPosY(ImGui.getCursorPosY() + trackOffset);
+            float rowOffset = repositioningKeyframeRow == rowIndex ? mouseY - dragStartMouseY : (int) keyframeTrack.animatedOffsetInUi;
+            // Camera-owned rows are indented beneath their camera's row; the indent is the visual
+            // statement that they belong to it.
+            float indent = row.isCameraChild() ? ReplayUI.scaleUi(14) : 0;
+            ImGui.setCursorScreenPos(x + 8 + indent, rowTop(y, rowIndex) + rowOffset);
+
+            if (row.isCameraChild()) {
+                // A vertical line down the indent, so a camera's rows read as a group.
+                float indentX = x + 6 + indent / 2;
+                drawList.addLine(indentX, rowTop(y, rowIndex) - 2, indentX,
+                        rowTop(y, rowIndex) + lineHeight - 2, 0x40FFFFFF);
+            }
 
             if (keyframeTrack.customColour != 0) {
                 int colour = keyframeTrack.customColour & 0xFFFFFF;
                 colour |= 0x30000000;
-                float rectY = y + 3 + trackIndex * lineHeight;
-                if (trackIndex == 0) {
-                    rectY -= 1;
-                }
-                drawList.addRectFilled(x + middleX + 1, rectY, x + width,
-                        y + 2 + trackIndex * lineHeight + lineHeight, colour);
+                drawList.addRectFilled(x + middleX + 1, rowTop(y, rowIndex) - 3, x + width,
+                        rowTop(y, rowIndex) + lineHeight - 4, colour);
             }
 
             ImGui.pushStyleVar(ImGuiStyleVar.ItemSpacing, 0, 0);
-            if (repositioningKeyframeTrack == trackIndex) {
+            if (repositioningKeyframeRow == rowIndex) {
                 ImGui.textUnformatted("\ue945");
             } else {
                 ImGui.textDisabled("\ue945");
                 if (ImGui.isItemClicked(ImGuiMouseButton.Left)) {
-                    repositioningKeyframeTrack = trackIndex;
+                    repositioningKeyframeRow = rowIndex;
+                    dragStartMouseY = mouseY;
                 }
             }
             ImGui.sameLine();
@@ -2027,8 +2247,11 @@ public class TimelineWindow {
                     createNewKeyframe(trackIndex, cursorTicks, keyframeType, keyframeTrack);
 
                     if (keyframeType instanceof CameraKeyframeType && Minecraft.getInstance().player != Minecraft.getInstance().getCameraEntity()) {
+                        // Adding a camera keyframe while spectating a player is contradictory, so
+                        // leave the spectated entity - directly, not with /spectate, which needs a
+                        // round-trip that a stepping replay does not make.
                         ReplayUI.setInfoOverlay(I18n.get("flashback.camera_keyframes_not_needed"));
-                        Minecraft.getInstance().getConnection().sendCommand("spectate");
+                        new MinecraftKeyframeHandler(Minecraft.getInstance()).stopSpectating();
                     }
                 }
                 drawList.addText(buttonX - 2, buttonY, -1, "\ue148");
@@ -2061,8 +2284,10 @@ public class TimelineWindow {
                 if (ImGui.menuItem("\ue40a " + I18n.get("flashback.set_colour"))) {
                     openTrackColourPopup = true;
                 }
-                if (ImGui.menuItem("\ue872 " + I18n.get("flashback.delete_track"))) {
-                    keyframeTrackToDelete = trackIndex;
+                if (!KeyframeTrack.isCameraSwitch(keyframeTrack)) {
+                    if (ImGui.menuItem("\ue872 " + I18n.get("flashback.delete_track"))) {
+                        keyframeTrackToDelete = trackIndex;
+                    }
                 }
                 if (ImGui.menuItem("\ue14a " + I18n.get("flashback.clear_keyframes"))) {
                     keyframeTrackToClear = trackIndex;
@@ -2092,12 +2317,12 @@ public class TimelineWindow {
                 ImGui.endPopup();
             }
 
-            ImGui.setCursorPosY(ImGui.getCursorPosY() - trackOffset);
-
             ImGui.separator();
 
             ImGui.popID();
         }
+
+        applyPendingCameraActions(cursorTicks);
 
         if (!hasOpenPopup) {
             createKeyframeWithPopup = null;
@@ -2244,6 +2469,44 @@ public class TimelineWindow {
             ImGui.endPopup();
         }
 
+        // Renaming a camera writes the name on the camera, and any name a track was carrying is
+        // cleared so a camera has one name rather than a name per row.
+        if (openRenameCameraPopup) {
+            ImGui.openPopup("##RenameCamera");
+            openRenameCameraPopup = false;
+        }
+        if (ImGuiHelper.beginPopup("##RenameCamera")) {
+            EditorCamera target = pendingRenameCameraTarget;
+            if (target != null) {
+                ImGui.setKeyboardFocusHere();
+                ImGui.inputText(I18n.get("flashback.name"), cameraNameString);
+                if (ImGui.button(I18n.get("flashback.rename")) || ReplayUI.consumeConfirm()) {
+                    String newName = ImGuiHelper.getString(cameraNameString).trim();
+                    if (!newName.isEmpty()) {
+                        upgradeToSceneWrite();
+                        target.name = newName;
+                        for (KeyframeTrack track : editorScene.tracksOfCamera(target)) {
+                            track.customName = null;
+                        }
+                        editorState.markDirty();
+                    }
+                    pendingRenameCameraTarget = null;
+                    ImGui.closeCurrentPopup();
+                }
+                ImGui.sameLine();
+                if (ImGui.button(I18n.get("gui.cancel")) || ReplayUI.consumeCancel()) {
+                    pendingRenameCameraTarget = null;
+                    ImGui.closeCurrentPopup();
+                }
+            } else {
+                ImGui.closeCurrentPopup();
+            }
+            ImGui.endPopup();
+        } else {
+            // The popup was dismissed some other way; forget the target so it cannot reopen itself.
+            pendingRenameCameraTarget = null;
+        }
+
         if (openDeleteScenePopup) {
             ImGui.openPopup("##DeleteScene");
         }
@@ -2275,8 +2538,21 @@ public class TimelineWindow {
         }
 
         if (ImGuiHelper.beginPopup("##AddKeyframeElement")) {
+            // Cameras first: they are what the timeline is organised around, and a camera's own
+            // tracks are added from the camera's own menu rather than appearing here as loose rows.
+            if (ImGui.menuItem("\ue04b " + I18n.get("flashback.new_camera"))) {
+                addCamera(EditorCamera.Kind.FREE, cursorTicks);
+                ImGui.closeCurrentPopup();
+            }
+            if (ImGui.menuItem("\ue8f4 " + I18n.get("flashback.new_spectate_camera"))) {
+                addCamera(EditorCamera.Kind.SPECTATE, cursorTicks);
+                ImGui.closeCurrentPopup();
+            }
+            ImGui.separator();
+
             for (KeyframeType<?> type : KeyframeRegistry.getTypes()) {
-                if (!type.canBeCreatedNormally()) {
+                if (!type.canBeCreatedNormally() || EditorScene.isCameraScoped(type)) {
+                    // A camera-owned type belongs to a camera, so it is added from that camera's row.
                     continue;
                 }
                 if (ImGui.selectable(type.name())) {
@@ -2291,14 +2567,286 @@ public class TimelineWindow {
                     editorScene.push(new EditorSceneHistoryEntry(undo, redo, I18n.get("flashback.create_named_track", type.name())));
                     editorState.markDirty();
                     ImGui.closeCurrentPopup();
-
-                    if (type == CameraKeyframeType.INSTANCE) {
-                        lastKeyframeTrackCameraWasAddedTo = editorScene.keyframeTracks.get(index);
-                    }
                 }
             }
             ImGui.endPopup();
         }
+    }
+
+    /**
+     * Draws the row for a camera: the header under which the camera's own tracks are grouped.
+     *
+     * <p>It carries the camera's name, whether it is collapsed, and the actions that concern the
+     * camera rather than one of its tracks - cutting to it, renaming it, adding a track to it and
+     * deleting it. Nothing here is a keyframe; the camera is a heading for the rows below it.
+     */
+    private static void renderCameraHeaderRow(float x, float y, int middleX, int rowIndex, EditorCamera camera,
+                                              ImDrawList drawList, float buttonSize, float spacingX) {
+        float lineHeight = rowHeight();
+        String name = editorScene.displayNameOf(camera);
+        String icon = camera.kind == EditorCamera.Kind.SPECTATE ? "\ue8f4" : "\ue04b";
+
+        ImGui.pushID(camera.id.hashCode());
+
+        float rowOffset = repositioningKeyframeRow == rowIndex ? mouseY - dragStartMouseY : 0;
+        ImGui.setCursorScreenPos(x + 8, rowTop(y, rowIndex) + rowOffset);
+
+        // Highlight the camera that is actually being output, so what the switch lane does is
+        // visible where the camera is, not only in the switch keyframe.
+        boolean active = editorScene.hasCameraSwitches() && camera == editorScene.resolveCameraAt(cursorTicks);
+        if (active) {
+            int colour = camera.kind == EditorCamera.Kind.SPECTATE ? 0x3020C0FF : 0x30FFC040;
+            drawList.addRectFilled(x + 1, rowTop(y, rowIndex) - 4,
+                x + middleX - 1, rowTop(y, rowIndex) + lineHeight - 4, colour);
+        }
+
+        ImGui.pushStyleVar(ImGuiStyleVar.ItemSpacing, 0, 0);
+        ImGui.textUnformatted(camera.collapsed ? "\ue5c5" : "\ue5c7");
+        if (ImGui.isItemClicked(ImGuiMouseButton.Left)) {
+            camera.collapsed = !camera.collapsed;
+            if (camera.collapsed) {
+                // Its rows are about to be hidden, so nothing in them can stay selected or open for
+                // editing - otherwise the UI would hold state the user can no longer see or reach.
+                selectedKeyframesList.clear();
+                editingKeyframeTrack = -1;
+                editingKeyframeTick = -1;
+            }
+            editorState.markDirty();
+        }
+        ImGuiHelper.tooltip(I18n.get(camera.collapsed ? "flashback.camera_expand" : "flashback.camera_collapse"));
+        ImGui.sameLine();
+        ImGui.popStyleVar();
+
+        int nameColour = camera.kind == EditorCamera.Kind.SPECTATE ? 0xFF80D0FF : 0xFFFFD080;
+        ImGui.textColored(nameColour, icon + " " + name);
+        if (ImGui.isItemClicked(ImGuiMouseButton.Left) && ImGui.isMouseDoubleClicked(ImGuiMouseButton.Left)) {
+            pendingRenameCamera = camera;
+            cameraNameString = ImGuiHelper.createResizableImString(name);
+        }
+        if (ImGui.isItemClicked(ImGuiMouseButton.Right)) {
+            ImGui.openPopup("##CameraPopup");
+        }
+        ImGuiHelper.tooltip(I18n.get("flashback.camera_kind." + camera.kind.name().toLowerCase(Locale.ROOT)));
+
+        ImGui.sameLine();
+
+        float buttonX = x + middleX - (buttonSize + spacingX) * 2;
+        float buttonY = ImGui.getCursorScreenPosY();
+
+        // Cut to this camera at the cursor. The primary thing you do with a camera is output it, so
+        // it gets the button rather than being buried in the menu.
+        ImGui.setCursorPosX(buttonX - x);
+        if (ImGui.invisibleButton("##AddCameraSwitch", buttonSize, buttonSize)) {
+            pendingCutToCamera = camera;
+        }
+        drawList.addText(buttonX - 2, buttonY, -1, "\ue148");
+        ImGuiHelper.tooltip(I18n.get("flashback.cut_to_this_camera"));
+
+        ImGui.sameLine();
+        buttonX += buttonSize + spacingX;
+        ImGui.setCursorPosX(buttonX - x);
+        if (ImGui.invisibleButton("##CameraOptions", buttonSize, buttonSize) || ImGui.isItemClicked(ImGuiMouseButton.Right)) {
+            ImGui.openPopup("##CameraPopup");
+        }
+        drawList.addText(buttonX - 2, buttonY, -1, "\ue5d2");
+        ImGuiHelper.tooltip(I18n.get("flashback.open_camera_options"));
+
+        if (ImGuiHelper.beginPopup("##CameraPopup")) {
+            boolean anyTrackOptions = false;
+            for (KeyframeType<?> type : camera.kind.trackTypes()) {
+                if (editorScene.hasTrackOfType(camera, type)) {
+                    continue;
+                }
+                anyTrackOptions = true;
+                if (ImGui.menuItem("\ue148 " + I18n.get("flashback.add_named_track", type.name()) + "##AddCameraTrack_" + type.id())) {
+                    pendingAddTrackToCamera = camera;
+                    pendingAddTrackType = type;
+                }
+            }
+            if (anyTrackOptions) {
+                ImGui.separator();
+            }
+            if (ImGui.menuItem("\ue3c9 " + I18n.get("flashback.rename"))) {
+                pendingRenameCamera = camera;
+                cameraNameString = ImGuiHelper.createResizableImString(name);
+            }
+            if (ImGui.menuItem("\ue872 " + I18n.get("flashback.delete_camera"))) {
+                pendingDeleteCamera = camera;
+            }
+            ImGui.endPopup();
+        }
+
+        ImGui.popID();
+
+        ImGui.separator();
+    }
+
+    /** Actions the camera rows asked for this frame, applied once all rows have been drawn. */
+    @Nullable
+    private static EditorCamera pendingDeleteCamera = null;
+    @Nullable
+    private static EditorCamera pendingRenameCamera = null;
+    @Nullable
+    private static EditorCamera pendingRenameCameraTarget = null;
+    private static boolean openRenameCameraPopup = false;
+    @Nullable
+    private static EditorCamera pendingCutToCamera = null;
+    @Nullable
+    private static EditorCamera pendingAddTrackToCamera = null;
+    @Nullable
+    private static KeyframeType<?> pendingAddTrackType = null;
+    private static ImString cameraNameString = null;
+
+    private static void applyPendingCameraActions(int cursorTicks) {
+        EditorCamera delete = pendingDeleteCamera;
+        EditorCamera rename = pendingRenameCamera;
+        EditorCamera cut = pendingCutToCamera;
+        EditorCamera addTo = pendingAddTrackToCamera;
+        KeyframeType<?> addType = pendingAddTrackType;
+
+        pendingDeleteCamera = null;
+        pendingRenameCamera = null;
+        pendingCutToCamera = null;
+        pendingAddTrackToCamera = null;
+        pendingAddTrackType = null;
+
+        if (cut != null) {
+            cutToCamera(cut, cursorTicks);
+        }
+        if (addTo != null && addType != null) {
+            addTrackToCamera(addTo, addType);
+        }
+        if (delete != null) {
+            deleteCamera(delete);
+        }
+        if (rename != null) {
+            cameraNameString = ImGuiHelper.createResizableImString(editorScene.displayNameOf(rename));
+            pendingRenameCameraTarget = rename;
+            openRenameCameraPopup = true;
+        }
+    }
+
+    /**
+     * Creates a camera and gives it a first track, so it is immediately usable.
+     *
+     * <p>A camera with no tracks would show as an empty heading, so the two are created together.
+     */
+    private static void addCamera(EditorCamera.Kind kind, int tick) {
+        upgradeToSceneWrite();
+
+        EditorCamera camera = new EditorCamera(null, kind);
+        KeyframeType<?> firstType = kind.trackTypes().get(0);
+        int cameraIndex = editorScene.cameras.size();
+        int trackIndex = editorScene.insertionIndexForTrackOf(camera);
+
+        List<EditorSceneHistoryAction> undo = List.of(
+            new EditorSceneHistoryAction.RemoveTrack(firstType, trackIndex),
+            new EditorSceneHistoryAction.RemoveCamera(camera));
+        List<EditorSceneHistoryAction> redo = List.of(
+            new EditorSceneHistoryAction.AddCamera(camera, cameraIndex, List.of()),
+            new EditorSceneHistoryAction.AddTrack(firstType, trackIndex, camera.id));
+
+        editorScene.push(new EditorSceneHistoryEntry(undo, redo, I18n.get("flashback.create_named_track", firstType.name())));
+
+        // A new camera is only meaningful once it is the one being output, so cut to it right away.
+        cutToCamera(camera, tick);
+
+        editorState.markDirty();
+        rebuildTimelineRows();
+    }
+
+    /**
+     * Records that {@code camera} becomes the output at {@code tick}.
+     *
+     * <p>If a switch already exists at that exact tick it is retargeted, so repeatedly cutting at the
+     * same position replaces the cut rather than stacking keyframes on top of each other.
+     */
+    private static void cutToCamera(EditorCamera camera, int tick) {
+        upgradeToSceneWrite();
+
+        KeyframeTrack switchTrack = editorScene.findOrCreateCameraSwitchTrack();
+        Keyframe existing = switchTrack.keyframesByTick.get(tick);
+        if (existing instanceof CameraSwitchKeyframe switchKeyframe && camera.id.equals(switchKeyframe.cameraId)) {
+            return;
+        }
+
+        int switchTrackIndex = editorScene.keyframeTracks.indexOf(switchTrack);
+        editorScene.setKeyframe(switchTrackIndex, tick, new CameraSwitchKeyframe(camera.id));
+        editorState.markDirty();
+        rebuildTimelineRows();
+    }
+
+    /** Removes a camera and every track it owns, as one undoable action. */
+    private static void deleteCamera(EditorCamera camera) {
+        upgradeToSceneWrite();
+
+        List<EditorSceneHistoryAction> undo = new ArrayList<>();
+        List<EditorSceneHistoryAction> redo = new ArrayList<>();
+
+        // Removing must go from the highest index down, or earlier indices shift under us. Undo
+        // restores from the lowest up for the same reason.
+        List<Integer> indices = new ArrayList<>();
+        for (int i = 0; i < editorScene.keyframeTracks.size(); i++) {
+            if (camera.id.equals(editorScene.keyframeTracks.get(i).cameraId)) {
+                indices.add(i);
+            }
+        }
+
+        for (int index : indices) {
+            KeyframeTrack track = editorScene.keyframeTracks.get(index);
+            undo.add(new EditorSceneHistoryAction.AddTrack(track.keyframeType, index, camera.id));
+            for (Map.Entry<Integer, Keyframe> entry : track.keyframesByTick.entrySet()) {
+                undo.add(new EditorSceneHistoryAction.SetKeyframe(track.keyframeType, index, entry.getKey(), entry.getValue().copy()));
+            }
+        }
+        for (int i = indices.size() - 1; i >= 0; i--) {
+            int index = indices.get(i);
+            redo.add(new EditorSceneHistoryAction.RemoveTrack(editorScene.keyframeTracks.get(index).keyframeType, index));
+        }
+
+        // Switches that named this camera would otherwise dangle. Record which ones so undo puts the
+        // cuts back rather than leaving them pointing at whatever they fell back to.
+        List<EditorSceneHistoryAction.AddCamera.CameraSwitchEdit> switchEdits = new ArrayList<>();
+        KeyframeTrack switchTrack = editorScene.cameraSwitchTrack();
+        int switchTrackIndex = editorScene.keyframeTracks.indexOf(switchTrack);
+        if (switchTrack != null) {
+            for (Map.Entry<Integer, Keyframe> entry : switchTrack.keyframesByTick.entrySet()) {
+                if (entry.getValue() instanceof CameraSwitchKeyframe switchKeyframe
+                        && camera.id.equals(switchKeyframe.cameraId)) {
+                    switchEdits.add(new EditorSceneHistoryAction.AddCamera.CameraSwitchEdit(
+                        switchTrackIndex, entry.getKey(), camera.id));
+                }
+            }
+        }
+
+        int cameraIndex = editorScene.cameras.indexOf(camera);
+        // Undo runs in list order, so the camera must be put back before its rows are: the rows need
+        // an owner to belong to, and the switches need a camera to point at.
+        undo.add(0, new EditorSceneHistoryAction.AddCamera(camera, Math.max(0, cameraIndex), switchEdits));
+        redo.add(new EditorSceneHistoryAction.RemoveCamera(camera));
+
+        editorScene.push(new EditorSceneHistoryEntry(undo, redo, I18n.get("flashback.delete_named_camera", editorScene.displayNameOf(camera))));
+        editorState.markDirty();
+        selectedKeyframesList.clear();
+        rebuildTimelineRows();
+    }
+
+    /** Adds one more track of the given type to a camera. */
+    private static void addTrackToCamera(EditorCamera camera, KeyframeType<?> type) {
+        if (!camera.canOwn(type) || editorScene.hasTrackOfType(camera, type)) {
+            return;
+        }
+
+        upgradeToSceneWrite();
+
+        int index = editorScene.insertionIndexForTrackOf(camera);
+        List<EditorSceneHistoryAction> undo = List.of(new EditorSceneHistoryAction.RemoveTrack(type, index));
+        List<EditorSceneHistoryAction> redo = List.of(new EditorSceneHistoryAction.AddTrack(type, index, camera.id));
+
+        editorScene.push(new EditorSceneHistoryEntry(undo, redo, I18n.get("flashback.create_named_track", type.name())));
+
+        editorState.markDirty();
+        rebuildTimelineRows();
     }
 
     private static void createNewKeyframe(int trackIndex, int tick, KeyframeType<?> keyframeType, KeyframeTrack keyframeTrack) {
@@ -2310,10 +2858,6 @@ public class TimelineWindow {
 
         Keyframe keyframe = keyframeType.createDirect();
         if (keyframe != null) {
-            if (keyframeType == CameraKeyframeType.INSTANCE) {
-                lastKeyframeTrackCameraWasAddedTo = editorScene.keyframeTracks.get(trackIndex);
-            }
-
             editorScene.setKeyframe(trackIndex, tick, keyframe);
             editorState.markDirty();
         } else {

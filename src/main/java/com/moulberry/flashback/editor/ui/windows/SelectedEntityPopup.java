@@ -32,6 +32,7 @@ import java.nio.file.Path;
 import java.util.EnumSet;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import com.moulberry.flashback.keyframe.handler.MinecraftKeyframeHandler;
 
 public class SelectedEntityPopup {
 
@@ -68,7 +69,11 @@ public class SelectedEntityPopup {
         }
         ImGui.sameLine();
         if (ImGui.button(I18n.get("flashback.spectate"))) {
-            Minecraft.getInstance().player.connection.sendCommand("spectate " + entity.getUUID());
+            // Directly, rather than with /spectate: the command needs a round-trip that is not
+            // processed while the replay is stepping ticks, and the server has to be told who is
+            // being watched so it can keep the camera pointed at them as entities are replaced.
+            new MinecraftKeyframeHandler(Minecraft.getInstance())
+                .applySpectate(entity.getUUID());
             ImGui.closeCurrentPopup();
         }
         ImGui.sameLine();

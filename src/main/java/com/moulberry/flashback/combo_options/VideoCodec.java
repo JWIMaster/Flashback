@@ -68,6 +68,29 @@ public enum VideoCodec implements ComboOption {
         return this.supportsTransparency;
     }
 
+    /**
+     * Whether a target bitrate means anything for this codec.
+     *
+     * <p>The lossless and intra-only codecs below do not have rate control at all - their size
+     * follows from the profile or from the source - so offering a bitrate for them would be a
+     * control that does nothing. For those the UI hides the bitrate field and no bitrate is passed
+     * to the encoder.
+     */
+    public boolean usesBitrate() {
+        return switch (this) {
+            case H264, H265, AV1, VP9, WEBP -> true;
+            // ProRes is constant quality per profile; QuickTime RLE, GIF, PNG and EXR are lossless.
+            case PRO_RES, QUICK_TIME, GIF, PNG, EXR -> false;
+        };
+    }
+
+    /**
+     * Whether a ProRes profile applies, which is the only quality control ProRes has.
+     */
+    public boolean hasProResProfile() {
+        return this == PRO_RES;
+    }
+
     public String[] getEncoders() {
         if (this.encoders == null) {
             List<String> encodersHardware = new ArrayList<>();

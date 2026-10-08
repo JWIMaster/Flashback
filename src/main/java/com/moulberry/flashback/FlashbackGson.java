@@ -34,6 +34,8 @@ public class FlashbackGson {
             .registerTypeAdapter(CameraKeyframe.class, new CameraKeyframe.TypeAdapter())
             .registerTypeAdapter(CameraOrbitKeyframe.class, new CameraOrbitKeyframe.TypeAdapter())
             .registerTypeAdapter(TrackEntityKeyframe.class, new TrackEntityKeyframe.TypeAdapter())
+            .registerTypeAdapter(CameraSwitchKeyframe.class, new CameraSwitchKeyframe.TypeAdapter())
+            .registerTypeAdapter(SpectateKeyframe.class, new SpectateKeyframe.TypeAdapter())
             .registerTypeAdapter(FOVKeyframe.class, new FOVKeyframe.TypeAdapter())
             .registerTypeAdapter(CameraShakeKeyframe.class, new CameraShakeKeyframe.TypeAdapter())
             .registerTypeAdapter(TickrateKeyframe.class, new TickrateKeyframe.TypeAdapter())
@@ -48,6 +50,8 @@ public class FlashbackGson {
             .registerTypeAdapter(EditorSceneHistoryAction.RemoveKeyframe.class, new EditorSceneHistoryAction.RemoveKeyframe.TypeAdapter())
             .registerTypeAdapter(EditorSceneHistoryAction.AddTrack.class, new EditorSceneHistoryAction.AddTrack.TypeAdapter())
             .registerTypeAdapter(EditorSceneHistoryAction.RemoveTrack.class, new EditorSceneHistoryAction.RemoveTrack.TypeAdapter())
+            .registerTypeAdapter(EditorSceneHistoryAction.AddCamera.class, new EditorSceneHistoryAction.AddCamera.TypeAdapter())
+            .registerTypeAdapter(EditorSceneHistoryAction.RemoveCamera.class, new EditorSceneHistoryAction.RemoveCamera.TypeAdapter())
             .registerTypeAdapter(EditorSceneHistoryAction.class, new EditorSceneHistoryAction.TypeAdapter());
     }
 

@@ -112,9 +112,23 @@ public abstract class MixinLevelExtractor {
 
             }
         } else {
-            throw new IllegalStateException("Expected an AvatarRenderState for the local player");
+            // A replay replaces its entities as it ticks, so the player resolved at the start of this
+            // frame can be gone by the time it is extracted, and a removed entity does not extract
+            // into an avatar. Render the frame without a spectated first-person player rather than
+            // taking the game down; report it once so a genuine mod conflict - a renderer returning
+            // something other than an avatar for a live player - is still visible rather than hidden.
+            if (warnedAboutUnexpectedAvatarState.compareAndSet(false, true)) {
+                Flashback.LOGGER.error("Spectated player {} did not extract into an AvatarRenderState (got {}). " +
+                        "Falling back to the replay's own viewpoint for that frame; further occurrences are not logged.",
+                    player.getUUID(), entityRenderState == null ? "null" : entityRenderState.getClass().getName());
+            }
+            state.hasPlayer = false;
         }
     }
+
+    @Unique
+    private static final java.util.concurrent.atomic.AtomicBoolean warnedAboutUnexpectedAvatarState =
+        new java.util.concurrent.atomic.AtomicBoolean(false);
 
     @Unique
     private static @Nullable BlockState flashbackGetViewBlockingState(final AbstractClientPlayer player, final Frustum frustum) {

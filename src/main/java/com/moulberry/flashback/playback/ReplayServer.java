@@ -158,6 +158,17 @@ public class ReplayServer extends IntegratedServer {
     private StreamCodec<ByteBuf, Packet<? super ClientGamePacketListener>> gamePacketCodec;
     private final StreamCodec<ByteBuf, Packet<? super ClientConfigurationPacketListener>> configurationPacketCodec;
     private final List<ReplayPlayer> replayViewers = new ArrayList<>();
+
+    /**
+     * A pending change to who the replay viewers should be watching.
+     *
+     * <p>Written from the client thread when a keyframe is applied, and picked up on the next server
+     * tick. Going through a request rather than mutating the viewers directly is what keeps the
+     * server's view of the spectate target authoritative and free of cross-thread races.
+     */
+    private volatile boolean spectateRequestPending = false;
+    private volatile @Nullable UUID spectateRequestTarget = null;
+
     public boolean followLocalPlayerNextTickIfWrongDimension = false;
     public boolean isProcessingSnapshot = false;
     public List<FlashbackRawCustomPayload> customPacketsInSnapshot = new ArrayList<>();
@@ -580,6 +591,49 @@ public class ReplayServer extends IntegratedServer {
         return this.replayViewers;
     }
 
+    /**
+     * Asks the replay viewers to watch the given player, or to stop watching anyone when the target
+     * is null.
+     *
+     * <p>This replaces sending a {@code /spectate} command. The command needs a client/server
+     * round-trip that is not guaranteed to complete while a replay is stepping ticks - notably
+     * during an export - and it leaves the server unaware of the target, so the per-tick repair that
+     * copes with the watched entity being replaced never runs.
+     */
+    public void setSpectateTarget(@Nullable UUID target) {
+        if (java.util.Objects.equals(this.spectateRequestTarget, target)) {
+            // The desired target has not changed. Keyframes are applied every tick, so without this
+            // the server would be asked to re-establish a camera that is already correct on every
+            // single tick.
+            return;
+        }
+        this.spectateRequestTarget = target;
+        this.spectateRequestPending = true;
+    }
+
+    /**
+     * Applies a pending spectate change to one viewer. Called as each viewer is discovered, because
+     * the viewer list is rebuilt every tick.
+     */
+    private void applyPendingSpectateRequest(ReplayPlayer viewer) {
+        if (!this.spectateRequestPending) {
+            return;
+        }
+
+        UUID target = this.spectateRequestTarget;
+        if (target == null) {
+            viewer.clearSpectateTarget();
+        } else {
+            if (!java.util.Objects.equals(viewer.spectateTarget, target)) {
+                // Keep the UUID even if the player is not in this tick's snapshot yet, so the repair
+                // below keeps retrying rather than the spectate silently doing nothing.
+                viewer.spectateTarget = target;
+                viewer.forceRespectateTickCount = 5;
+            }
+            viewer.syncCameraToSpectateTarget();
+        }
+    }
+
     public int getLocalPlayerId() {
         return this.gamePacketHandler.localPlayerId;
     }
@@ -910,23 +964,24 @@ public class ReplayServer extends IntegratedServer {
         this.replayViewers.clear();
         this.hasNonSpectatorReplayViewer = false;
 
+        // Take the pending spectate request once, then apply it to each viewer as it is found: the
+        // viewer list is rebuilt here, so applying it before this loop would apply it to nobody.
+        boolean applySpectateRequest = this.spectateRequestPending;
+        this.spectateRequestPending = false;
+
         for (ServerPlayer player : this.getPlayerList().getPlayers()) {
             if (player instanceof ReplayPlayer replayPlayer) {
-                if (replayPlayer.isShiftKeyDown()) {
-                    replayPlayer.spectatingUuid = null;
-                    replayPlayer.spectatingUuidTickCount = 0;
-                    replayPlayer.forceRespectateTickCount = 0;
-                } else {
-                    Entity cameraEntity = replayPlayer.getCamera();
-                    if (cameraEntity != null && cameraEntity != replayPlayer) {
-                        replayPlayer.spectatingUuid = cameraEntity.getUUID();
-                        replayPlayer.spectatingUuidTickCount = 20;
-                    } else if (replayPlayer.spectatingUuidTickCount > 0) {
-                        replayPlayer.spectatingUuidTickCount -= 1;
-                    } else {
-                        replayPlayer.spectatingUuid = null;
-                    }
+                if (applySpectateRequest) {
+                    this.applyPendingSpectateRequest(replayPlayer);
                 }
+                if (replayPlayer.isShiftKeyDown()) {
+                    // Shift is the explicit "stop watching anyone" gesture.
+                    replayPlayer.clearSpectateTarget();
+                }
+                // There is deliberately no inference of the target from the camera entity here. The
+                // camera is a resolution of the target, not the other way round: deriving one from
+                // the other meant the per-tick repair could erase the target it was repairing for.
+                // Callers that want to watch someone set the target explicitly.
                 if (!replayPlayer.isSpectator()) {
                     this.hasNonSpectatorReplayViewer = true;
                 }
@@ -995,21 +1050,11 @@ public class ReplayServer extends IntegratedServer {
 
         // Update first person data
         for (ReplayPlayer replayViewer : this.replayViewers) {
-            // Ensure replay viewers are still spectating
-            if (replayViewer.spectatingUuid != null) {
-                Entity camera = replayViewer.getCamera();
-                if (replayViewer.forceRespectateTickCount > 0 || camera == null || camera == replayViewer || camera.isRemoved()) {
-                    Entity targetEntity = replayViewer.level().getEntity(replayViewer.spectatingUuid);
-                    if (targetEntity != null && !targetEntity.isRemoved()) {
-                        replayViewer.setCamera(null);
-                        replayViewer.setCamera(targetEntity);
-                        replayViewer.spectatingUuid = targetEntity.getUUID();
-
-                        if (replayViewer.forceRespectateTickCount == 0) {
-                            replayViewer.forceRespectateTickCount = 5;
-                        }
-                    }
-                }
+            // Re-resolve the camera against the intended target. A replay replaces entities as it
+            // ticks, so the entity the camera points at can be discarded at any moment; the target
+            // UUID is what survives, and this is what stops the camera going stale.
+            if (replayViewer.spectateTarget != null) {
+                replayViewer.syncCameraToSpectateTarget();
             }
             if (replayViewer.forceRespectateTickCount > 0) {
                 replayViewer.forceRespectateTickCount -= 1;

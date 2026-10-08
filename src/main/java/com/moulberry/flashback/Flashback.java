@@ -288,6 +288,8 @@ public class Flashback implements ModInitializer, ClientModInitializer {
         KeyframeRegistry.register(CameraKeyframeType.INSTANCE);
         KeyframeRegistry.register(CameraOrbitKeyframeType.INSTANCE);
         KeyframeRegistry.register(TrackEntityKeyframeType.INSTANCE);
+        KeyframeRegistry.register(CameraSwitchKeyframeType.INSTANCE);
+        KeyframeRegistry.register(SpectateKeyframeType.INSTANCE);
         KeyframeRegistry.register(CameraShakeKeyframeType.INSTANCE);
         KeyframeRegistry.register(FOVKeyframeType.INSTANCE);
         KeyframeRegistry.register(SpeedKeyframeType.INSTANCE);
@@ -1125,8 +1127,13 @@ public class Flashback implements ModInitializer, ClientModInitializer {
         if (!isInReplay()) {
             return null;
         }
-        if (Minecraft.getInstance().getCameraEntity() instanceof AbstractClientPlayer clientPlayer) {
-            if (clientPlayer != Minecraft.getInstance().player) {
+        Minecraft minecraft = Minecraft.getInstance();
+        if (minecraft.getCameraEntity() instanceof AbstractClientPlayer clientPlayer) {
+            // The camera must point at a live player in the level currently being rendered. A replay
+            // replaces its entities as it ticks, so the camera can briefly point at an instance that
+            // has already been discarded; treating that as "not spectating" is better than rendering
+            // a ghost until the server's repair pass catches up.
+            if (clientPlayer != minecraft.player && !clientPlayer.isRemoved() && clientPlayer.level() == minecraft.level) {
                 return clientPlayer;
             }
         }

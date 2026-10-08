@@ -67,26 +67,25 @@ public class EditorStateManager {
         Path normalPath = getPath(currentUuid, false);
         Path backupPath = getPath(currentUuid, true);
 
+        // A project that cannot be read is never deleted. The usual reason is that it was written by
+        // a newer Flashback that knows a keyframe type this version does not, and discarding someone's
+        // editing work because of a version difference is far worse than leaving the file on disk. If
+        // the backup loads it will be saved over the unreadable file on the next save, which moves
+        // that file aside as the ".old" backup rather than destroying it.
         if (Files.exists(normalPath)) {
             current = EditorState.load(normalPath);
-            if (current == null) {
-                try {
-                    Files.deleteIfExists(normalPath);
-                } catch (IOException ignored) {}
-            } else {
+            if (current != null) {
                 return;
             }
+            Flashback.LOGGER.warn("Could not read editor state {}, leaving it in place", normalPath);
         }
 
         if (Files.exists(backupPath)) {
             current = EditorState.load(backupPath);
-            if (current == null) {
-                try {
-                    Files.deleteIfExists(backupPath);
-                } catch (IOException ignored) {}
-            } else {
+            if (current != null) {
                 return;
             }
+            Flashback.LOGGER.warn("Could not read editor state backup {}, leaving it in place", backupPath);
         }
 
         current = new EditorState();

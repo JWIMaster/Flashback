@@ -7,6 +7,7 @@ import com.moulberry.flashback.combo_options.AudioCodec;
 import com.moulberry.flashback.combo_options.ExportProjection;
 import com.moulberry.flashback.combo_options.MarkerColour;
 import com.moulberry.flashback.combo_options.MovementDirection;
+import com.moulberry.flashback.combo_options.ProResProfile;
 import com.moulberry.flashback.combo_options.RecordingControlsLocation;
 import com.moulberry.flashback.combo_options.VideoCodec;
 import com.moulberry.flashback.combo_options.VideoContainer;
@@ -328,6 +329,8 @@ public class FlashbackConfigV1 {
         public VideoCodec videoCodec = null;
         public String selectedVideoEncoder = null;
         public boolean useMaximumBitrate = false;
+        /** ProRes only: the profile is that codec's quality control, in place of a bitrate. */
+        public ProResProfile proResProfile = ProResProfile.STANDARD;
 
         public boolean recordAudio = false;
         public boolean transparentBackground = false;

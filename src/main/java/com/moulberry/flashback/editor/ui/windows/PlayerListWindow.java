@@ -25,6 +25,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
+import com.moulberry.flashback.keyframe.handler.MinecraftKeyframeHandler;
 
 public class PlayerListWindow {
 
@@ -165,7 +166,9 @@ public class PlayerListWindow {
                 }
                 ImGui.sameLine();
                 if (ImGui.smallButton(I18n.get("flashback.spectate"))) {
-                    Minecraft.getInstance().getConnection().sendCommand("spectate " + profile.id());
+                    // Directly, rather than with /spectate: see MinecraftKeyframeHandler.applySpectate.
+                    new MinecraftKeyframeHandler(Minecraft.getInstance())
+                        .applySpectate(profile.id());
                     lastUpdate = currentTime;
                 }
                 ImGui.popID();

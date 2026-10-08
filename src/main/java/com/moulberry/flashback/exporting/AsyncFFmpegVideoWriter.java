@@ -32,6 +32,7 @@ import java.util.function.Consumer;
 
 import static org.bytedeco.ffmpeg.global.avutil.*;
 import static org.bytedeco.ffmpeg.global.swscale.sws_freeContext;
+import com.moulberry.flashback.combo_options.VideoCodec;
 
 public class AsyncFFmpegVideoWriter implements AutoCloseable, VideoWriter {
 
@@ -68,7 +69,11 @@ public class AsyncFFmpegVideoWriter implements AutoCloseable, VideoWriter {
 
             boolean wantTransparency = settings.transparent();
 
-            int dstPixelFormat = PixelFormatHelper.getBestPixelFormat(settings.encoder(), srcPixelFormat, wantTransparency);
+            // A ProRes profile decides the chroma layout, so ask for a matching format rather than
+            // letting the pixel format decide the profile behind the user's back.
+            int[] preferredFormats = preferredFormatsFor(settings);
+
+            int dstPixelFormat = PixelFormatHelper.getBestPixelFormat(settings.encoder(), srcPixelFormat, wantTransparency, preferredFormats);
             Flashback.LOGGER.info("Starting export. Container={}. Codec={}. Encoder={}, Format={}",
                 settings.container().text(), settings.codec().text(),
                 settings.encoder(), PixelFormatHelper.pixelFormatToString(dstPixelFormat));
@@ -131,7 +136,11 @@ public class AsyncFFmpegVideoWriter implements AutoCloseable, VideoWriter {
 
             final FlashbackFFmpegFrameRecorder recorder = new FlashbackFFmpegFrameRecorder(this.filename, width, height, audioChannels);
 
-            recorder.setVideoBitrate(bitrate);
+            // Only codecs with rate control get a bitrate. For ProRes, QuickTime RLE and the lossless
+            // codecs it would be a number the encoder ignores, which is worse than not sending one.
+            if (settings.codec().usesBitrate()) {
+                recorder.setVideoBitrate(bitrate);
+            }
             recorder.setVideoCodec(settings.codec().codecId());
             recorder.setVideoCodecName(settings.encoder());
             recorder.setFormat(extension);
@@ -139,13 +148,28 @@ public class AsyncFFmpegVideoWriter implements AutoCloseable, VideoWriter {
             recorder.setPixelFormat(dstPixelFormat);
             recorder.setGopSize((int) Math.max(20, Math.min(240, Math.ceil(fps * 2))));
 
+            if (settings.codec().hasProResProfile() && settings.proResProfile() != null) {
+                recorder.setVideoProfile(settings.proResProfile().profile());
+            }
+
+            // Tag the stream with the colour properties the rescale pass actually produces. This is
+            // deliberately SDR BT.709: Flashback renders and reads back 8-bit SDR frames, so calling
+            // the output HDR would be a lie. Anything else would need a different render/readback
+            // path, not a different tag.
+            if (PixelFormatHelper.isYuvFormat(dstPixelFormat)) {
+                boolean fullRange = PixelFormatHelper.isFullRange(dstPixelFormat);
+                recorder.setVideoColor(AVCOL_SPC_BT709, AVCOL_PRI_BT709, AVCOL_TRC_BT709,
+                    fullRange ? AVCOL_RANGE_JPEG : AVCOL_RANGE_MPEG);
+                tagX264StyleColor(recorder, settings.encoder());
+            }
+
             if (settings.container().isImageSequence() && settings.pngSequenceFormat() == null) {
                 recorder.setMuxerOption("update", "1");
             }
             if (settings.encoder().equals("exr")) {
                 recorder.setVideoOption("compression", "zip1");
             }
-            if (settings.bitrate() == 0) {
+            if (settings.bitrate() == 0 && settings.codec().usesBitrate()) {
                 if (settings.encoder().endsWith("_nvenc")) {
                     recorder.setVideoOption("preset", "p7");
                 } else if (settings.encoder().endsWith("_amf")) {
@@ -176,6 +200,36 @@ public class AsyncFFmpegVideoWriter implements AutoCloseable, VideoWriter {
             encodeThread.start();
         } catch (IOException e) {
             throw SneakyThrow.sneakyThrow(e);
+        }
+    }
+
+    /**
+     * The pixel formats to prefer for the chosen settings.
+     *
+     * <p>ProRes 4444 carries an alpha channel and needs a 4:4:4 layout, while the 422 variants need
+     * 4:2:2. Asking for the format that matches the profile keeps the encoder from inferring a
+     * different variant from whatever format happened to be cheapest.
+     */
+    private static int[] preferredFormatsFor(ExportSettings settings) {
+        if (settings.codec() != VideoCodec.PRO_RES || settings.proResProfile() == null) {
+            return new int[0];
+        }
+        if (settings.proResProfile().supportsAlpha()) {
+            return new int[]{avutil.AV_PIX_FMT_YUVA444P10LE, avutil.AV_PIX_FMT_YUV444P10LE};
+        }
+        return new int[]{avutil.AV_PIX_FMT_YUV422P10LE};
+    }
+
+    /**
+     * libx264 and libx265 write their own colour description into the bitstream and ignore the codec
+     * context fields, so the matrix/primaries/transfer have to be passed as encoder parameters.
+     * Other encoders take the context fields, which the recorder sets.
+     */
+    private static void tagX264StyleColor(FlashbackFFmpegFrameRecorder recorder, String encoder) {
+        if (encoder.equals("libx264")) {
+            recorder.setVideoOption("x264-params", "colorprim=bt709:transfer=bt709:colormatrix=bt709:range=tv");
+        } else if (encoder.equals("libx265")) {
+            recorder.setVideoOption("x265-params", "colorprim=bt709:transfer=bt709:colormatrix=bt709:range=limited");
         }
     }
 
@@ -255,6 +309,9 @@ public class AsyncFFmpegVideoWriter implements AutoCloseable, VideoWriter {
         Flashback.LOGGER.info("Rescaling to pixel format: {}", PixelFormatHelper.pixelFormatToString(dstPixelFormat));
 
         boolean useItu709Colorspace = PixelFormatHelper.isYuvFormat(dstPixelFormat);
+        // Full-range destinations (yuvj*) cannot signal a limited range, so the conversion has to
+        // produce full-range samples; the stream is tagged to match.
+        boolean fullRangeOutput = useItu709Colorspace && PixelFormatHelper.isFullRange(dstPixelFormat);
 
         Thread scaleThread = new Thread(() -> {
             SwsContext img_convert_ctx = null;
@@ -281,8 +338,11 @@ public class AsyncFFmpegVideoWriter implements AutoCloseable, VideoWriter {
                     }
 
                     if (useItu709Colorspace) {
+                        // BT.709 for both the conversion and the stream tag, so what is encoded and
+                        // what is declared agree. Source frames are full-range RGBA.
                         IntPointer coefficients = swscale.sws_getCoefficients(swscale.SWS_CS_ITU709);
-                        swscale.sws_setColorspaceDetails(img_convert_ctx, coefficients, 1, coefficients, 0, 0, 1 << 16, 1 << 16);
+                        swscale.sws_setColorspaceDetails(img_convert_ctx, coefficients, 1, coefficients,
+                            fullRangeOutput ? 1 : 0, 0, 1 << 16, 1 << 16);
                     }
 
                     BytePointer data = new BytePointer() {{

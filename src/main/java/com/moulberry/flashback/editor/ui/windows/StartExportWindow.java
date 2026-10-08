@@ -5,6 +5,7 @@ import com.moulberry.flashback.Utils;
 import com.moulberry.flashback.combo_options.AspectRatio;
 import com.moulberry.flashback.combo_options.AudioCodec;
 import com.moulberry.flashback.combo_options.ExportProjection;
+import com.moulberry.flashback.combo_options.ProResProfile;
 import com.moulberry.flashback.combo_options.Sizing;
 import com.moulberry.flashback.combo_options.VideoCodec;
 import com.moulberry.flashback.combo_options.VideoContainer;
@@ -374,7 +375,14 @@ public class StartExportWindow {
 
         }
 
-        if (config.internalExport.videoCodec != VideoCodec.GIF) {
+        if (config.internalExport.videoCodec.hasProResProfile()) {
+            // ProRes has no rate control, so its profile is the quality setting instead of a bitrate.
+            if (config.internalExport.proResProfile == null) {
+                config.internalExport.proResProfile = ProResProfile.STANDARD;
+            }
+            config.internalExport.proResProfile = ImGuiHelper.enumCombo(I18n.get("flashback.prores_profile"),
+                config.internalExport.proResProfile, ProResProfile.values());
+        } else if (config.internalExport.videoCodec.usesBitrate()) {
             if (ImGui.checkbox(I18n.get("flashback.use_maximum_bitrate"), config.internalExport.useMaximumBitrate)) {
                 config.internalExport.useMaximumBitrate = !config.internalExport.useMaximumBitrate;
             }
@@ -385,16 +393,19 @@ public class StartExportWindow {
                     bitrate.set(bitrateToString(numBitrate));
                 }
             }
-        } else {
+        } else if (config.internalExport.videoCodec == VideoCodec.GIF) {
             ImGui.pushTextWrapPos();
             ImGui.textColored(0xFFFFFFFF, I18n.get("flashback.gif_output_warning"));
             ImGui.popTextWrapPos();
         }
+        // Codecs that ignore a bitrate show nothing here rather than a control that does nothing.
     }
 
     private static CompletableFuture<ExportSettings> createExportSettings(@Nullable String name, FlashbackConfigV1 config) {
         int numBitrate;
-        if (config.internalExport.useMaximumBitrate) {
+        if (config.internalExport.useMaximumBitrate || config.internalExport.videoCodec == null
+                || !config.internalExport.videoCodec.usesBitrate()) {
+            // Codecs without rate control do not get a bitrate at all; 0 means "as high as allowed".
             numBitrate = 0;
         } else {
             numBitrate = stringToBitrate(ImGuiHelper.getString(bitrate));
@@ -464,7 +475,9 @@ public class StartExportWindow {
                     config.internalExport.resolution[0], config.internalExport.resolution[1], start, end,
                     config.internalExport.projection, config.internalExport.orthographicZoom[0],
                     Math.max(1, config.internalExport.framerate[0]), config.internalExport.resetRng, config.internalExport.depthMap,
-                    config.internalExport.container, useVideoCodec, encoder, numBitrate, transparent, config.internalExport.ssaa, config.internalExport.noGui,
+                    config.internalExport.container, useVideoCodec, encoder, numBitrate,
+                    useVideoCodec.hasProResProfile() ? config.internalExport.proResProfile : null,
+                    transparent, config.internalExport.ssaa, config.internalExport.noGui,
                     config.internalExport.stereoAudio, useAudioCodec,
                     path, ImGuiHelper.getString(pngSequenceFormat));
             }

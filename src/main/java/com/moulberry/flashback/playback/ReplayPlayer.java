@@ -21,8 +21,16 @@ import java.util.UUID;
 
 public class ReplayPlayer extends ServerPlayer {
     public boolean followLocalPlayerNextTick = false;
-    public UUID spectatingUuid = null;
-    public int spectatingUuidTickCount = 0;
+
+    /**
+     * The player this viewer is meant to be watching, or null to watch the replay's own viewpoint.
+     *
+     * <p>This is the authoritative record of intent: the camera entity itself is only the current
+     * resolution of it. Keeping the intent separate matters because a replay destroys and recreates
+     * entities as it streams, so the entity the camera points at is routinely discarded while the
+     * player being watched has not changed.
+     */
+    public UUID spectateTarget = null;
     public int forceRespectateTickCount = 0;
 
     public UUID lastFirstPersonDataUUID = null;
@@ -49,9 +57,41 @@ public class ReplayPlayer extends ServerPlayer {
     @Override
     public void setCamera(@Nullable Entity entity) {
         super.setCamera(entity);
+    }
 
-        if (entity == null) {
-            this.spectatingUuid = null;
+    /**
+     * Points the camera at the entity currently representing {@link #spectateTarget}, or back at
+     * this viewer when there is no target or its entity is not in the level.
+     *
+     * <p>Called every server tick, so this is what repairs the camera after the replay destroys and
+     * recreates the watched entity: the target is remembered as a UUID, and the camera entity is
+     * only ever a resolution of it.
+     */
+    public void syncCameraToSpectateTarget() {
+        Entity resolved = null;
+        if (this.spectateTarget != null && this.level() != null) {
+            Entity entity = this.level().getEntity(this.spectateTarget);
+            if (entity != null && !entity.isRemoved() && entity != this) {
+                resolved = entity;
+            }
+        }
+
+        Entity wanted = resolved == null ? this : resolved;
+        if (this.getCamera() != wanted) {
+            super.setCamera(wanted);
+            if (resolved != null && this.forceRespectateTickCount == 0) {
+                // Ask the client to re-establish its own camera over the next few ticks.
+                this.forceRespectateTickCount = 5;
+            }
+        }
+    }
+
+    /** Stops following anyone and points the camera back at this viewer. */
+    public void clearSpectateTarget() {
+        this.spectateTarget = null;
+        this.forceRespectateTickCount = 0;
+        if (this.getCamera() != this) {
+            super.setCamera(this);
         }
     }
 

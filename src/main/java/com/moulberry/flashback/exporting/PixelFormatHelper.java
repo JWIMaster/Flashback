@@ -19,17 +19,26 @@ import java.util.Map;
 
 public class PixelFormatHelper {
 
-    private record BestFormatKey(String codec, int srcPixelFormat, boolean transparent) {}
-    private static final Map<BestFormatKey, Integer> bestPixelFormats = new HashMap<>();
-
     public static int getBestPixelFormat(String codecName, int srcPixelFormat, boolean transparent) {
-        BestFormatKey key = new BestFormatKey(codecName, srcPixelFormat, transparent);
+        return getBestPixelFormat(codecName, srcPixelFormat, transparent, new int[0]);
+    }
+
+    /**
+     * Picks the pixel format to encode in, preferring one of {@code preferredFormats} when the
+     * encoder advertises it.
+     *
+     * <p>Preferences matter for codecs whose profile decides the chroma layout: ProRes 4444 needs a
+     * 4:4:4 format, while the 422 variants do not, and picking the cheapest advertised format would
+     * silently produce a different variant than the one chosen.
+     */
+    public static int getBestPixelFormat(String codecName, int srcPixelFormat, boolean transparent, int[] preferredFormats) {
+        BestFormatKey key = new BestFormatKey(codecName, srcPixelFormat, transparent, java.util.Arrays.hashCode(preferredFormats));
 
         if (bestPixelFormats.containsKey(key)) {
             return bestPixelFormats.get(key);
         }
 
-        int bestPixelFormat = calculateBestPixelFormat(codecName, srcPixelFormat, transparent);
+        int bestPixelFormat = calculateBestPixelFormat(codecName, srcPixelFormat, transparent, preferredFormats);
 
         if (bestPixelFormat == avutil.AV_PIX_FMT_NONE) {
             throw new RuntimeException("Unable to determine best alternate pixel format for " + codecName);
@@ -43,7 +52,10 @@ public class PixelFormatHelper {
         return bestPixelFormat;
     }
 
-    private static int calculateBestPixelFormat(String codecName, int srcPixelFormat, boolean transparent) {
+    private record BestFormatKey(String codec, int srcPixelFormat, boolean transparent, int preferredHash) {}
+    private static final Map<BestFormatKey, Integer> bestPixelFormats = new HashMap<>();
+
+    private static int calculateBestPixelFormat(String codecName, int srcPixelFormat, boolean transparent, int[] preferredFormats) {
         try (AVCodec codec = avcodec.avcodec_find_encoder_by_name(codecName)) {
             IntList supportedFormats = new IntArrayList();
 
@@ -61,7 +73,7 @@ public class PixelFormatHelper {
                     break;
                 }
 
-                if (!transparent && pixFmt == avutil.AV_PIX_FMT_YUV420P) {
+                if (!transparent && preferredFormats.length == 0 && pixFmt == avutil.AV_PIX_FMT_YUV420P) {
                     return avutil.AV_PIX_FMT_YUV420P;
                 }
 
@@ -70,6 +82,13 @@ public class PixelFormatHelper {
             }
 
             supportedFormats.add(avutil.AV_PIX_FMT_NONE);
+
+            // A preferred format wins if the encoder really advertises it.
+            for (int preferred : preferredFormats) {
+                if (supportedFormats.contains(preferred)) {
+                    return preferred;
+                }
+            }
 
             if (transparent) {
                 int format = avcodec.avcodec_find_best_pix_fmt_of_list(supportedFormats.toIntArray(), srcPixelFormat, 1, new int[1]);
@@ -133,6 +152,17 @@ public class PixelFormatHelper {
 
             return (descriptor.flags() & avutil.AV_PIX_FMT_FLAG_RGB) == 0 && descriptor.nb_components() >= 2;
         }
+    }
+
+    /**
+     * Whether a pixel format is full-range by definition (the deprecated {@code yuvj*} JPEG family).
+     *
+     * <p>These formats have no way to signal a limited range, so the conversion has to be told to
+     * produce full-range samples or the output comes out washed out.
+     */
+    public static boolean isFullRange(int pixelFormat) {
+        String name = pixelFormatToString(pixelFormat);
+        return name != null && name.startsWith("yuvj");
     }
 
 }

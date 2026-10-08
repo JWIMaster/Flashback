@@ -128,6 +128,8 @@ public class FlashbackFFmpegFrameRecorder {
     private String format, videoCodecName;
     private int imageWidth, imageHeight, audioChannels;
     private int pixelFormat, videoCodec, videoBitrate, gopSize = -1, videoProfile = -1;
+    private int videoColorspace = AVCOL_SPC_UNSPECIFIED, videoColorPrimaries = AVCOL_PRI_UNSPECIFIED,
+                videoColorTrc = AVCOL_TRC_UNSPECIFIED, videoColorRange = AVCOL_RANGE_UNSPECIFIED;
     private double frameRate, videoQuality = -1;
     private int sampleFormat, audioCodec, audioBitrate, sampleRate;
     private double audioQuality = -1;
@@ -315,6 +317,24 @@ public class FlashbackFFmpegFrameRecorder {
         this.gopSize = gopSize;
     }
 
+    public void setVideoProfile(int videoProfile) {
+        this.videoProfile = videoProfile;
+    }
+
+    /**
+     * Tags the encoded video with its colour properties.
+     *
+     * <p>Without this the stream carries no indication of how the YUV samples were derived, so a
+     * player has to guess the matrix and range - which is what makes correctly converted video look
+     * washed out or oversaturated. Only call this when the conversion really produced those values.
+     */
+    public void setVideoColor(int colorspace, int colorPrimaries, int colorTrc, int colorRange) {
+        this.videoColorspace = colorspace;
+        this.videoColorPrimaries = colorPrimaries;
+        this.videoColorTrc = colorTrc;
+        this.videoColorRange = colorRange;
+    }
+
     public void setFrameRate(double frameRate) {
         this.frameRate = frameRate;
     }
@@ -433,6 +453,21 @@ public class FlashbackFFmpegFrameRecorder {
                 }
                 if (videoProfile >= 0) {
                     video_c.profile(videoProfile);
+                }
+                // Tag the colour properties the conversion produced. The muxer reads these from the
+                // stream's codec parameters, and encoders that read them from the frame get them in
+                // recordImage() as well.
+                if (videoColorspace != AVCOL_SPC_UNSPECIFIED) {
+                    video_c.colorspace(videoColorspace);
+                }
+                if (videoColorPrimaries != AVCOL_PRI_UNSPECIFIED) {
+                    video_c.color_primaries(videoColorPrimaries);
+                }
+                if (videoColorTrc != AVCOL_TRC_UNSPECIFIED) {
+                    video_c.color_trc(videoColorTrc);
+                }
+                if (videoColorRange != AVCOL_RANGE_UNSPECIFIED) {
+                    video_c.color_range(videoColorRange);
                 }
                 if (videoQuality >= 0) {
                     video_c.flags(video_c.flags() | AV_CODEC_FLAG_QSCALE);
@@ -605,6 +640,21 @@ public class FlashbackFFmpegFrameRecorder {
                 if ((ret = avcodec_parameters_from_context(video_st.codecpar(), video_c)) < 0) {
                     releaseUnsafe();
                     throw new FlashbackFFmpegFrameRecorder.Exception("avcodec_parameters_from_context() error " + ret + ": Could not copy the video stream parameters.");
+                }
+                // Not every FFmpeg version carries the colour fields across in
+                // avcodec_parameters_from_context, and the muxer writes the header from codecpar,
+                // so set them explicitly rather than relying on that.
+                if (videoColorspace != AVCOL_SPC_UNSPECIFIED) {
+                    video_st.codecpar().color_space(videoColorspace);
+                }
+                if (videoColorPrimaries != AVCOL_PRI_UNSPECIFIED) {
+                    video_st.codecpar().color_primaries(videoColorPrimaries);
+                }
+                if (videoColorTrc != AVCOL_TRC_UNSPECIFIED) {
+                    video_st.codecpar().color_trc(videoColorTrc);
+                }
+                if (videoColorRange != AVCOL_RANGE_UNSPECIFIED) {
+                    video_st.codecpar().color_range(videoColorRange);
                 }
 
                 AVDictionary metadata = new AVDictionary(null);
@@ -849,6 +899,18 @@ public class FlashbackFFmpegFrameRecorder {
                 picture.format(pixelFormat);
                 picture.width(width);
                 picture.height(height);
+                if (videoColorspace != AVCOL_SPC_UNSPECIFIED) {
+                    picture.colorspace(videoColorspace);
+                }
+                if (videoColorPrimaries != AVCOL_PRI_UNSPECIFIED) {
+                    picture.color_primaries(videoColorPrimaries);
+                }
+                if (videoColorTrc != AVCOL_TRC_UNSPECIFIED) {
+                    picture.color_trc(videoColorTrc);
+                }
+                if (videoColorRange != AVCOL_RANGE_UNSPECIFIED) {
+                    picture.color_range(videoColorRange);
+                }
             }
 
             /* encode the image */

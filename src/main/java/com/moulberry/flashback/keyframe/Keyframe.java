@@ -106,6 +106,8 @@ public abstract class Keyframe {
                 case "timelapse" -> context.deserialize(json, TimelapseKeyframe.class);
                 case "time" -> context.deserialize(json, TimeOfDayKeyframe.class);
                 case "camera_shake" -> context.deserialize(json, CameraShakeKeyframe.class);
+                case "camera_switch" -> context.deserialize(json, CameraSwitchKeyframe.class);
+                case "spectate" -> context.deserialize(json, SpectateKeyframe.class);
                 case "block_override" -> context.deserialize(json, BlockOverrideKeyframe.class);
                 case "audio" -> context.deserialize(json, AudioKeyframe.class);
                 default -> throw new IllegalStateException("Unknown keyframe type: " + type);
@@ -153,6 +155,14 @@ public abstract class Keyframe {
                 case AudioKeyframe audioKeyframe -> {
                     jsonObject = (JsonObject) context.serialize(audioKeyframe);
                     jsonObject.addProperty("type", "audio");
+                }
+                case CameraSwitchKeyframe cameraSwitchKeyframe -> {
+                    jsonObject = (JsonObject) context.serialize(cameraSwitchKeyframe);
+                    jsonObject.addProperty("type", "camera_switch");
+                }
+                case SpectateKeyframe spectateKeyframe -> {
+                    jsonObject = (JsonObject) context.serialize(spectateKeyframe);
+                    jsonObject.addProperty("type", "spectate");
                 }
                 default -> throw new IllegalStateException("Unknown keyframe type: " + src.getClass());
             }

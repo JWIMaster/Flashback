@@ -11,6 +11,7 @@ import com.moulberry.flashback.keyframe.impl.TimelapseKeyframe;
 import com.moulberry.flashback.keyframe.interpolation.InterpolationType;
 import com.moulberry.flashback.keyframe.interpolation.SidedInterpolationType;
 import com.moulberry.flashback.keyframe.types.AudioKeyframeType;
+import com.moulberry.flashback.keyframe.types.CameraSwitchKeyframeType;
 import com.moulberry.flashback.keyframe.types.TimelapseKeyframeType;
 import imgui.moulberry90.type.ImString;
 import org.jetbrains.annotations.Nullable;
@@ -18,12 +19,25 @@ import org.jetbrains.annotations.Nullable;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.TreeMap;
+import java.util.UUID;
 
 public class KeyframeTrack {
 
     public final KeyframeType<?> keyframeType;
     public TreeMap<Integer, Keyframe> keyframesByTick = new TreeMap<>();
     public boolean enabled = true;
+
+    /**
+     * The camera this track belongs to, or null for a track that belongs to the scene.
+     *
+     * <p>Camera-owned tracks live in {@link EditorScene#keyframeTracks} alongside everything else so
+     * that the timeline stays one ordered list - selection, undo and copy-paste all address tracks by
+     * index and keep working unchanged. Camera ownership is what the timeline groups and indents by,
+     * and what playback uses to decide whether the track applies to the camera currently being
+     * output.
+     */
+    public UUID cameraId = null;
+
     public String customName = null;
     public int customColour = 0;
 
@@ -33,6 +47,24 @@ public class KeyframeTrack {
 
     public KeyframeTrack(KeyframeType<?> keyframeType) {
         this.keyframeType = keyframeType;
+    }
+
+    /** True for the single lane that decides which camera is output. */
+    public static boolean isCameraSwitch(KeyframeTrack track) {
+        return track.keyframeType == CameraSwitchKeyframeType.INSTANCE;
+    }
+
+    /** Deep copy of the track and its keyframes, preserving name, colour, enabled state and owner. */
+    public KeyframeTrack copy() {
+        KeyframeTrack copy = new KeyframeTrack(this.keyframeType);
+        copy.enabled = this.enabled;
+        copy.cameraId = this.cameraId;
+        copy.customName = this.customName;
+        copy.customColour = this.customColour;
+        for (Map.Entry<Integer, Keyframe> entry : this.keyframesByTick.entrySet()) {
+            copy.keyframesByTick.put(entry.getKey(), entry.getValue().copy());
+        }
+        return copy;
     }
 
     @Nullable

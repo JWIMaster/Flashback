@@ -120,7 +120,7 @@ public class ExportScreenshotWindow {
                             config.internalExport.resolution[0], config.internalExport.resolution[1], tick, tick,
                             config.internalExport.projection, config.internalExport.orthographicZoom[0],
                             1, false, false,
-                            VideoContainer.PNG_SEQUENCE, codec, encoder, 0, transparent, ssaa, noGui,
+                            VideoContainer.PNG_SEQUENCE, codec, encoder, 0, null, transparent, ssaa, noGui,
                             false, null,
                             path, null);
 

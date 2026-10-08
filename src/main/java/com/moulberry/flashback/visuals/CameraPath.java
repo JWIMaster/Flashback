@@ -195,16 +195,22 @@ public class CameraPath {
             state.applyKeyframes(handler, args.lastCameraTick);
             state.applyKeyframes(fovHandler, args.lastCameraTick);
 
-            renderCamera(bufferBuilder, handler.position.add(offset, new Vector3d()), handler.angle, fovHandler.fov,
-                getCameraColour(false, false), 1.0f);
+            // No position means the camera output at that tick follows an entity instead of being
+            // positioned by keyframes, so there is no frustum to draw.
+            if (handler.position != null) {
+                renderCamera(bufferBuilder, handler.position.add(offset, new Vector3d()), handler.angle, fovHandler.fov,
+                    getCameraColour(false, false), 1.0f);
+            }
 
             if (args.lastLastCameraTick != -1) {
                 fovHandler.fov = defaultFov;
                 state.applyKeyframes(handler, args.lastLastCameraTick);
                 state.applyKeyframes(fovHandler, args.lastLastCameraTick);
 
-                renderCamera(bufferBuilder, handler.position.add(offset, new Vector3d()), handler.angle, fovHandler.fov,
-                    getCameraColour(false, false), 0.6f);
+                if (handler.position != null) {
+                    renderCamera(bufferBuilder, handler.position.add(offset, new Vector3d()), handler.angle, fovHandler.fov,
+                        getCameraColour(false, false), 0.6f);
+                }
                 renderPath(bufferBuilder, args.lastLastCameraTick, args.lastCameraTick, state, offset, handler, 0.6f);
             }
         }
@@ -214,16 +220,20 @@ public class CameraPath {
             state.applyKeyframes(handler, args.nextCameraTick);
             state.applyKeyframes(fovHandler, args.nextCameraTick);
 
-            renderCamera(bufferBuilder, handler.position.add(offset, new Vector3d()), handler.angle, fovHandler.fov,
-                getCameraColour(false, false), 1.0f);
+            if (handler.position != null) {
+                renderCamera(bufferBuilder, handler.position.add(offset, new Vector3d()), handler.angle, fovHandler.fov,
+                    getCameraColour(false, false), 1.0f);
+            }
 
             if (args.nextNextCameraTick != -1) {
                 fovHandler.fov = defaultFov;
                 state.applyKeyframes(handler, args.nextNextCameraTick);
                 state.applyKeyframes(fovHandler, args.nextNextCameraTick);
 
-                renderCamera(bufferBuilder, handler.position.add(offset, new Vector3d()), handler.angle, fovHandler.fov,
-                    getCameraColour(false, false), 0.6f);
+                if (handler.position != null) {
+                    renderCamera(bufferBuilder, handler.position.add(offset, new Vector3d()), handler.angle, fovHandler.fov,
+                        getCameraColour(false, false), 0.6f);
+                }
                 renderPath(bufferBuilder, args.nextCameraTick, args.nextNextCameraTick, state, offset, handler, 0.6f);
             }
         }
@@ -251,6 +261,14 @@ public class CameraPath {
 
         for (int tick = fromTick; tick <= toTick; tick += step) {
             editorState.applyKeyframes(handler, tick);
+
+            // A spectate camera has no recorded position at all: the viewpoint follows an entity, so
+            // there is no trajectory to draw. Skipping those ticks is the honest answer.
+            if (handler.position == null) {
+                lastPosition = null;
+                continue;
+            }
+
             Vector3d position = handler.position.add(offset, new Vector3d());
 
             if (lastPosition != null) {
