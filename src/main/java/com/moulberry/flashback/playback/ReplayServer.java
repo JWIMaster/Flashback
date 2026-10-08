@@ -158,8 +158,6 @@ public class ReplayServer extends IntegratedServer {
     private StreamCodec<ByteBuf, Packet<? super ClientGamePacketListener>> gamePacketCodec;
     private final StreamCodec<ByteBuf, Packet<? super ClientConfigurationPacketListener>> configurationPacketCodec;
     private final List<ReplayPlayer> replayViewers = new ArrayList<>();
-    private volatile boolean spectateRequestPending = false;
-    private volatile @Nullable UUID spectateRequestTarget = null;
     public boolean followLocalPlayerNextTickIfWrongDimension = false;
     public boolean isProcessingSnapshot = false;
     public List<FlashbackRawCustomPayload> customPacketsInSnapshot = new ArrayList<>();
@@ -582,51 +580,6 @@ public class ReplayServer extends IntegratedServer {
         return this.replayViewers;
     }
 
-    /**
-     * Asks the replay viewers to spectate the given player (or to stop spectating, if target is null).
-     *
-     * <p>This replaces sending a {@code /spectate} command. The command needs a client/server round-trip
-     * which is not guaranteed to complete while a replay is stepping ticks (notably during an export),
-     * and it left this server unaware of the spectate target, so the pass in {@link #tickServer} that
-     * repairs a replay viewer whose camera entity has been removed or replaced never ran. The request is
-     * applied at the start of the next server tick on the server thread, which is also what makes
-     * {@code ReplayPlayer.spectatingUuid} authoritative.
-     */
-    public void requestSpectate(@Nullable UUID target) {
-        this.spectateRequestTarget = target;
-        this.spectateRequestPending = true;
-    }
-
-    private void applyPendingSpectateRequest() {
-        if (!this.spectateRequestPending) {
-            return;
-        }
-        this.spectateRequestPending = false;
-
-        UUID target = this.spectateRequestTarget;
-        for (ReplayPlayer viewer : this.replayViewers) {
-            if (target == null) {
-                viewer.setCamera(viewer);
-                viewer.spectatingUuid = null;
-                viewer.spectatingUuidTickCount = 0;
-                viewer.forceRespectateTickCount = 0;
-                continue;
-            }
-
-            // Keep the UUID even if the player is not in this tick's snapshot yet, so the pass below
-            // keeps retrying rather than the spectate silently doing nothing.
-            viewer.spectatingUuid = target;
-            viewer.spectatingUuidTickCount = 20;
-
-            Entity entity = viewer.level() == null ? null : viewer.level().getEntity(target);
-            if (entity != null && !entity.isRemoved()) {
-                viewer.setCamera(entity);
-            } else {
-                viewer.forceRespectateTickCount = 5;
-            }
-        }
-    }
-
     public int getLocalPlayerId() {
         return this.gamePacketHandler.localPlayerId;
     }
@@ -980,8 +933,6 @@ public class ReplayServer extends IntegratedServer {
                 this.replayViewers.add(replayPlayer);
             }
         }
-
-        this.applyPendingSpectateRequest();
 
         // Pause replay if game is paused (by opening the ESC pause menu for example)
         if (!this.replayPaused && this.isPaused()) {
