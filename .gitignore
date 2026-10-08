@@ -38,3 +38,8 @@ hs_err_*.log
 replay_*.log
 *.hprof
 *.jfr
+
+# tool output
+
+devtools/*/out/
+logs/
