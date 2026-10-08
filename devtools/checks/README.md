@@ -15,7 +15,6 @@ running:
 | `LayoutTest` | timeline rows, ordering, selection and panel geometry |
 | `OrbitTest` | what "the orbit camera" means: fixed point, or the subject it follows |
 | `ScrollBindingsTest` | the scroll gestures surviving the config, including a config that lost them |
-| `GuiLogTest` | reading container changes as "what moved where" |
 | `ImGuiPairingCheck` | every ImGui begin has its end, and nothing returns out of one |
 
 `stubs/` holds the stand-in for the game client that some of them need.

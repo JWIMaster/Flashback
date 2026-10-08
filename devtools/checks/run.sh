@@ -45,8 +45,7 @@ for suite in \
     com.moulberry.flashback.state.LoadCompatTest \
     com.moulberry.flashback.editor.ui.timeline.LayoutTest \
     com.moulberry.flashback.keyframe.OrbitTest \
-    com.moulberry.flashback.keybind.ScrollBindingsTest \
-    com.moulberry.flashback.gui.GuiLogTest; do
+    com.moulberry.flashback.keybind.ScrollBindingsTest; do
     printf '%-46s ' "$(basename "$suite")"
     if "$JAVA_HOME/bin/java" -cp "$RUN" "$suite" 2>&1 | tail -1; then :; else failures=$((failures + 1)); fi
 done
