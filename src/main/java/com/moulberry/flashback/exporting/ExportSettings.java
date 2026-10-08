@@ -2,6 +2,8 @@ package com.moulberry.flashback.exporting;
 
 import com.moulberry.flashback.combo_options.AudioCodec;
 import com.moulberry.flashback.combo_options.ExportProjection;
+import com.moulberry.flashback.combo_options.PixelDepth;
+import com.moulberry.flashback.combo_options.ProResProfile;
 import com.moulberry.flashback.combo_options.VideoCodec;
 import com.moulberry.flashback.combo_options.VideoContainer;
 import com.moulberry.flashback.state.EditorState;
@@ -18,7 +20,9 @@ public record ExportSettings(@Nullable String name, EditorState editorState,
                              ExportProjection projection, float orthographicZoom,
                              double framerate, boolean resetRng, boolean depthMap,
                              // Video
-                             VideoContainer container, VideoCodec codec, String encoder, int bitrate, boolean transparent, boolean ssaa, boolean noGui,
+                             VideoContainer container, VideoCodec codec, String encoder, @Nullable PixelDepth pixelDepth,
+                             @Nullable String pixelFormatName, @Nullable ProResProfile proresProfile,
+                             int bitrate, boolean transparent, boolean ssaa, boolean noGui,
                              // Audio
                              boolean stereoAudio, AudioCodec audioCodec,
                              // Output

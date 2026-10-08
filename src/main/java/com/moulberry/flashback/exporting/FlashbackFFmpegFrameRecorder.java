@@ -315,6 +315,14 @@ public class FlashbackFFmpegFrameRecorder {
         this.gopSize = gopSize;
     }
 
+    /**
+     * Sets the codec profile. Required for high-bit-depth ProRes: without a 4444/XQ profile the
+     * muxer silently negotiates 12-bit input down to 10-bit.
+     */
+    public void setVideoProfile(int videoProfile) {
+        this.videoProfile = videoProfile;
+    }
+
     public void setFrameRate(double frameRate) {
         this.frameRate = frameRate;
     }
