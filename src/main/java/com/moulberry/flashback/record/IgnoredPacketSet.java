@@ -1,6 +1,5 @@
 package com.moulberry.flashback.record;
 
-import com.moulberry.flashback.gui.GuiPlayback;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.common.*;
 import net.minecraft.network.protocol.configuration.ClientboundCodeOfConductPacket;
@@ -13,9 +12,27 @@ import java.util.Set;
 
 public class IgnoredPacketSet {
 
+    /**
+     * The packets that only matter when recorded containers are being shown.
+     *
+     * <p>They are worth a lot of bytes - a slot update is sent every time a player moves an item -
+     * so they are only written when {@code showGuisInReplays} asks for them, and a replay made
+     * without that behaves and weighs what it always did.
+     */
+    private static final Set<Class<?>> CONTAINER_PACKETS = Set.of(
+        ClientboundOpenScreenPacket.class,
+        ClientboundContainerClosePacket.class,
+        ClientboundContainerSetContentPacket.class,
+        ClientboundContainerSetDataPacket.class,
+        ClientboundContainerSetSlotPacket.class,
+        ClientboundSetCursorItemPacket.class,
+        ClientboundMerchantOffersPacket.class,
+        ClientboundMountScreenOpenPacket.class
+    );
+
     public static boolean isIgnored(Packet<?> packet) {
-        if (CONTAINER_PACKETS.contains(packet.getClass()) && !GuiPlayback.enabled()) {
-            // Only worth their bytes when the containers they describe are going to be shown.
+        if (CONTAINER_PACKETS.contains(packet.getClass())
+                && !com.moulberry.flashback.gui.GuiPlayback.enabled()) {
             return true;
         }
         return IGNORED.contains(packet.getClass());
@@ -25,12 +42,6 @@ public class IgnoredPacketSet {
         return IGNORED_IN_REPLAY.contains(packet.getClass());
     }
 
-    /** Packets describing a container being opened, used and closed. */
-    private static final Set<Class<?>> CONTAINER_PACKETS = Set.of(
-        ClientboundMountScreenOpenPacket.class
-    );
-
-    /** Packets that are written to a replay but deliberately not applied when it plays. */
     private static final Set<Class<?>> IGNORED_IN_REPLAY = Set.of(
         ClientboundAwardStatsPacket.class,
         ClientboundRecipeBookAddPacket.class,
@@ -44,6 +55,14 @@ public class IgnoredPacketSet {
         ClientboundTrackedWaypointPacket.class
     );
 
+    /**
+     * Packets that are not written to a replay at all.
+     *
+     * <p>Containers are deliberately absent: a replay is meant to show what the player saw, and what
+     * they saw when they opened a chest was a chest. Those packets are recorded and then only applied
+     * at playback if {@code showGuisInReplays} asks for it, so a replay made by someone who does not
+     * want them still behaves as before.
+     */
     private static final Set<Class<?>> IGNORED = Set.of(
         // Ignored because these are added directly by mixin/record/MixinClientLevel
         ClientboundLevelEventPacket.class,
@@ -68,13 +87,6 @@ public class IgnoredPacketSet {
 
         // Game
         ClientboundAwardStatsPacket.class,
-        ClientboundOpenScreenPacket.class,
-        ClientboundContainerClosePacket.class,
-        ClientboundContainerSetContentPacket.class,
-        ClientboundContainerSetDataPacket.class,
-        ClientboundContainerSetSlotPacket.class,
-        ClientboundSetCursorItemPacket.class,
-        ClientboundMerchantOffersPacket.class,
         ClientboundRecipeBookAddPacket.class,
         ClientboundRecipeBookRemovePacket.class,
         ClientboundRecipeBookSettingsPacket.class,

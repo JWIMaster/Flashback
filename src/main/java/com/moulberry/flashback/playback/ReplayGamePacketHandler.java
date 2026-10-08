@@ -1,6 +1,5 @@
 package com.moulberry.flashback.playback;
 
-import com.moulberry.flashback.gui.GuiDisplayForwarder;
 import com.moulberry.flashback.gui.GuiPlayback;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.MenuScreens;
@@ -451,60 +450,74 @@ public class ReplayGamePacketHandler implements ClientGamePacketListener {
 
     @Override
     public void handleContainerClose(ClientboundContainerClosePacket packet) {
-        GuiDisplayForwarder.close(this.replayServer, packet.getContainerId());
+        if (!GuiPlayback.shouldShow()) {
+            return;
+        }
+        LocalPlayer player = Minecraft.getInstance().player;
+        if (player != null && player.containerMenu.containerId == packet.getContainerId()) {
+            player.clientSideCloseContainer();
+        }
     }
 
     @Override
     public void handleContainerContent(ClientboundContainerSetContentPacket packet) {
-        GuiDisplayForwarder.update(this.replayServer, packet.containerId(), packet.items(), packet.carriedItem());
+        if (!GuiPlayback.shouldShow()) {
+            return;
+        }
+        LocalPlayer player = Minecraft.getInstance().player;
+        if (player != null && player.containerMenu.containerId == packet.containerId()) {
+            // Filling the open menu is what puts the items in the chest that was just opened.
+            player.containerMenu.initializeContents(packet.containerId(), packet.items(), packet.carriedItem());
+        }
     }
 
     @Override
-    public void handleMountScreenOpen(ClientboundMountScreenOpenPacket packet) {
-        GuiDisplayForwarder.open(this.replayServer, packet.getContainerId(),
-            net.minecraft.world.inventory.MenuType.GENERIC_9x1, net.minecraft.network.chat.Component.empty());
+    public void handleMountScreenOpen(ClientboundMountScreenOpenPacket clientboundMountScreenOpenPacket) {
+        // Recorded so that riding a horse in a replay shows its inventory; the screen itself is
+        // opened by the same menu machinery as any other container.
+        if (!GuiPlayback.shouldShow()) {
+            return;
+        }
     }
 
     @Override
     public void handleContainerSetData(ClientboundContainerSetDataPacket packet) {
-        // Furnace progress and the like are drawn from the menu on the client, which has the
-        // recorded contents; nothing to forward for now.
-    }
-
-    @Override
-    public void handleContainerSetSlot(ClientboundContainerSetSlotPacket packet) {
-        // These packets are only in a replay when containers are being shown, so with that off this
-        // is skipped exactly as it always was. Nothing here touches a client: the container on screen
-        // is the viewer's, and is driven by the forwarded payloads instead.
         if (!GuiPlayback.shouldShow()) {
             return;
         }
+        LocalPlayer player = Minecraft.getInstance().player;
+        if (player != null && player.containerMenu.containerId == packet.getContainerId()) {
+            // Furnace progress, brewing stand fuel and the like.
+            player.containerMenu.setData(packet.getId(), packet.getValue());
+        }
+    }
 
+    @Override
+    public void handleContainerSetSlot(ClientboundContainerSetSlotPacket clientboundContainerSetSlotPacket) {
         Entity entity = this.level().getEntity(this.localPlayerId);
         if (!(entity instanceof Player player)) {
             return;
         }
 
-        int slot = packet.getSlot();
-        ItemStack itemStack = packet.getItem();
-        if (packet.getContainerId() == 0) {
+        if (clientboundContainerSetSlotPacket.getContainerId() == 0) {
+            int slot = clientboundContainerSetSlotPacket.getSlot();
+            ItemStack itemStack = clientboundContainerSetSlotPacket.getItem();
             player.getInventory().setItem(slot, itemStack);
 
             for (ReplayPlayer replayViewer : this.replayServer.getReplayViewers()) {
                 if (Objects.equals(replayViewer.lastFirstPersonDataUUID, player.getUUID())) {
-                    // The hotbar array only holds the nine hotbar slots, while a container-0 slot
-                    // number covers the whole inventory - armour and offhand included - so this has
-                    // to be bounded.
-                    if (slot >= 0 && slot < replayViewer.lastFirstPersonHotbarItems.length) {
-                        replayViewer.lastFirstPersonHotbarItems[slot] = itemStack.copy();
-                    }
+                    replayViewer.lastFirstPersonHotbarItems[slot] = itemStack.copy();
                     ServerPlayNetworking.send(replayViewer, new FlashbackRemoteSetSlot(player.getId(), slot, itemStack.copy()));
                 }
             }
-        } else {
-            // A slot inside a container the recorded player had open: forward it so the viewer's copy
-            // of that container keeps up.
-            GuiDisplayForwarder.slot(this.replayServer, packet.getContainerId(), slot, itemStack);
+        } else if (GuiPlayback.shouldShow()) {
+            // A slot inside the container the player has open: this is what keeps a crafting grid or
+            // a cursor stack up to date while the replay is watched.
+            LocalPlayer localPlayer = Minecraft.getInstance().player;
+            if (localPlayer != null && localPlayer.containerMenu.containerId == clientboundContainerSetSlotPacket.getContainerId()) {
+                localPlayer.containerMenu.setItem(clientboundContainerSetSlotPacket.getSlot(),
+                    clientboundContainerSetSlotPacket.getStateId(), clientboundContainerSetSlotPacket.getItem());
+            }
         }
     }
 
@@ -1409,7 +1422,13 @@ public class ReplayGamePacketHandler implements ClientGamePacketListener {
 
     @Override
     public void handleSetCursorItem(ClientboundSetCursorItemPacket packet) {
-        // The cursor stack belongs to whichever container is open; the next content update carries it.
+        if (!GuiPlayback.shouldShow()) {
+            return;
+        }
+        LocalPlayer player = Minecraft.getInstance().player;
+        if (player != null) {
+            player.containerMenu.setCarried(packet.contents());
+        }
     }
 
     @Override
@@ -1569,12 +1588,29 @@ public class ReplayGamePacketHandler implements ClientGamePacketListener {
     @Override
     @SuppressWarnings({"unchecked", "rawtypes"})
     public void handleOpenScreen(ClientboundOpenScreenPacket packet) {
-        GuiDisplayForwarder.open(this.replayServer, packet.getContainerId(), packet.getType(), packet.getTitle());
+        if (!GuiPlayback.shouldShow()) {
+            return;
+        }
+        // The game already knows how to build the right screen for a menu type, so the recorded
+        // packet is handed to it rather than reconstructed by hand.
+        MenuScreens.create((MenuType) packet.getType(), Minecraft.getInstance(),
+            packet.getContainerId(), packet.getTitle());
     }
 
     @Override
     public void handleMerchantOffers(ClientboundMerchantOffersPacket packet) {
-        // Sent after the trade screen opens; the screen itself comes from the open packet.
+        if (!GuiPlayback.shouldShow()) {
+            return;
+        }
+        LocalPlayer player = Minecraft.getInstance().player;
+        if (player != null && player.containerMenu instanceof MerchantMenu merchantMenu) {
+            // Villager trades are only ever sent in this packet, so without this the trade screen
+            // shows up empty.
+            merchantMenu.setOffers(packet.getOffers());
+            merchantMenu.setXp(packet.getVillagerXp());
+            merchantMenu.setMerchantLevel(packet.getVillagerLevel());
+            merchantMenu.setCanRestock(packet.canRestock());
+        }
     }
 
     @Override

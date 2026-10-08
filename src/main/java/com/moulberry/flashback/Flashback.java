@@ -32,7 +32,6 @@ import com.moulberry.flashback.packet.FlashbackRawCustomPayload;
 import com.moulberry.flashback.packet.FlashbackRemoteExperience;
 import com.moulberry.flashback.packet.FlashbackRemoteFoodData;
 import com.moulberry.flashback.packet.FlashbackRemoteSelectHotbarSlot;
-import com.moulberry.flashback.packet.FlashbackRemoteContainer;
 import com.moulberry.flashback.packet.FlashbackRemoteSetSlot;
 import com.moulberry.flashback.packet.FlashbackSetBorderLerpStartTime;
 import com.moulberry.flashback.packet.FlashbackVoiceChatSound;
@@ -217,7 +216,6 @@ public class Flashback implements ModInitializer, ClientModInitializer {
         PayloadTypeRegistry.clientboundPlay().register(FlashbackRemoteExperience.TYPE, FlashbackRemoteExperience.STREAM_CODEC);
         PayloadTypeRegistry.clientboundPlay().register(FlashbackRemoteFoodData.TYPE, FlashbackRemoteFoodData.STREAM_CODEC);
         PayloadTypeRegistry.clientboundPlay().register(FlashbackRemoteSetSlot.TYPE, FlashbackRemoteSetSlot.STREAM_CODEC);
-        PayloadTypeRegistry.clientboundPlay().register(FlashbackRemoteContainer.TYPE, FlashbackRemoteContainer.STREAM_CODEC);
         PayloadTypeRegistry.clientboundPlay().register(FlashbackVoiceChatSound.TYPE, FlashbackVoiceChatSound.STREAM_CODEC);
         PayloadTypeRegistry.clientboundPlay().register(FlashbackAccurateEntityPosition.TYPE, FlashbackAccurateEntityPosition.STREAM_CODEC);
         PayloadTypeRegistry.clientboundPlay().register(FlashbackSetBorderLerpStartTime.TYPE, FlashbackSetBorderLerpStartTime.STREAM_CODEC);
@@ -364,14 +362,6 @@ public class Flashback implements ModInitializer, ClientModInitializer {
                     player.getFoodData().setFoodLevel(payload.foodLevel());
                     player.getFoodData().setSaturation(payload.saturationLevel());
                 }
-            }
-        });
-
-        ClientPlayNetworking.registerGlobalReceiver(FlashbackRemoteContainer.TYPE, (payload, context) -> {
-            if (Flashback.isInReplay()) {
-                // The client is the only place a screen may be built, so this is where a recorded
-                // container becomes something to look at.
-                com.moulberry.flashback.gui.GuiDisplay.handle(payload);
             }
         });
 
