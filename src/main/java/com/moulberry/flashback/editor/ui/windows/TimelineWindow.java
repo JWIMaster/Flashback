@@ -2029,9 +2029,7 @@ public class TimelineWindow {
 
                     if (keyframeType instanceof CameraKeyframeType && Minecraft.getInstance().player != Minecraft.getInstance().getCameraEntity()) {
                         ReplayUI.setInfoOverlay(I18n.get("flashback.camera_keyframes_not_needed"));
-                        // Direct, not /spectate: the command needs a server round-trip and is not
-                        // processed while the replay is stepping ticks.
-                        Minecraft.getInstance().setCameraEntity(Minecraft.getInstance().player);
+                        new MinecraftKeyframeHandler(Minecraft.getInstance()).stopSpectating();
                     }
                 }
                 drawList.addText(buttonX - 2, buttonY, -1, "\ue148");

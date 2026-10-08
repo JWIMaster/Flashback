@@ -21,6 +21,7 @@ import com.moulberry.flashback.exporting.ExportJob;
 import com.moulberry.flashback.exporting.taskbar.TaskbarManager;
 import com.moulberry.flashback.ext.MinecraftExt;
 import com.moulberry.flashback.keyframe.KeyframeRegistry;
+import com.moulberry.flashback.keyframe.handler.MinecraftKeyframeHandler;
 import com.moulberry.flashback.keyframe.types.*;
 import com.moulberry.flashback.packet.FlashbackAccurateEntityPosition;
 import com.moulberry.flashback.packet.FlashbackClearEntities;
@@ -143,6 +144,13 @@ import java.util.concurrent.locks.LockSupport;
 
 public class Flashback implements ModInitializer, ClientModInitializer {
     public static final Logger LOGGER = LoggerFactory.getLogger("flashback");
+
+    /**
+     * Set once so that a spectate target which cannot be extracted into an avatar render state is
+     * reported a single time instead of every frame. See {@code MixinLevelExtractor}.
+     */
+    public static final java.util.concurrent.atomic.AtomicBoolean warnedAboutSpectateRenderState =
+        new java.util.concurrent.atomic.AtomicBoolean(false);
 
     public static final int MAGIC = 0xD780E884;
     public static volatile Recorder RECORDER = null;
@@ -635,12 +643,10 @@ public class Flashback implements ModInitializer, ClientModInitializer {
                 addMarker(Flashback.config.marker.markerOptions4);
             }
 
-            // Direct camera-entity change rather than the /spectate command: the command needs a
-            // server round-trip and may never be processed while the replay is stepping ticks.
             if (stopSpectatingKeyBind.consumeClick()) {
                 Minecraft client = Minecraft.getInstance();
                 if (client.player != null && client.getCameraEntity() != client.player) {
-                    client.setCameraEntity(client.player);
+                    new MinecraftKeyframeHandler(client).stopSpectating();
                 }
             }
         });
@@ -1142,8 +1148,13 @@ public class Flashback implements ModInitializer, ClientModInitializer {
         if (!isInReplay()) {
             return null;
         }
-        if (Minecraft.getInstance().getCameraEntity() instanceof AbstractClientPlayer clientPlayer) {
-            if (clientPlayer != Minecraft.getInstance().player) {
+        Minecraft minecraft = Minecraft.getInstance();
+        if (minecraft.getCameraEntity() instanceof AbstractClientPlayer clientPlayer) {
+            // The camera entity has to be a live player in the level we are currently rendering.
+            // A replay replaces its entities as it ticks, so the camera can be left pointing at an
+            // instance that has already been discarded; treating that as "not spectating" is better
+            // than rendering a ghost.
+            if (clientPlayer != minecraft.player && !clientPlayer.isRemoved() && clientPlayer.level() == minecraft.level) {
                 return clientPlayer;
             }
         }

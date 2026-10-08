@@ -4,6 +4,7 @@ import com.mojang.authlib.GameProfile;
 import com.moulberry.flashback.Flashback;
 import com.moulberry.flashback.editor.ui.ImGuiHelper;
 import com.moulberry.flashback.editor.ui.WindowOpenState;
+import com.moulberry.flashback.keyframe.handler.MinecraftKeyframeHandler;
 import com.moulberry.flashback.state.EditorState;
 import com.moulberry.flashback.state.EditorStateManager;
 import imgui.moulberry90.ImGui;
@@ -165,7 +166,9 @@ public class PlayerListWindow {
                 }
                 ImGui.sameLine();
                 if (ImGui.smallButton(I18n.get("flashback.spectate"))) {
-                    Minecraft.getInstance().getConnection().sendCommand("spectate " + profile.id());
+                    // Directly, rather than with /spectate: the command needs a client/server round-trip
+                    // that is not guaranteed to complete while the replay is stepping ticks.
+                    new MinecraftKeyframeHandler(Minecraft.getInstance()).applySpectate(profile.id());
                     lastUpdate = currentTime;
                 }
                 ImGui.popID();

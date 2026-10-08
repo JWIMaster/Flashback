@@ -23,7 +23,6 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.tags.FluidTags;
 import net.minecraft.util.ARGB;
 import net.minecraft.world.effect.MobEffects;
-import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.level.block.RenderShape;
 import net.minecraft.world.level.block.state.BlockState;
@@ -42,9 +41,6 @@ public abstract class MixinLevelExtractor {
 
     @Shadow
     private @Nullable ClientLevel level;
-
-    @Shadow
-    protected abstract EntityRenderState extractEntity(Entity entity, float partialTickTime);
 
     @Shadow
     @Final
@@ -67,22 +63,38 @@ public abstract class MixinLevelExtractor {
             return;
         }
 
+        float playerPartialTick = deltaTracker.getGameTimeDeltaPartialTick(!this.level.tickRateManager().isEntityFrozen(player));
+        // Go through the public entity render dispatcher rather than LevelExtractor's own private
+        // extractEntity. The two are equivalent, but the shadow needed for the latter is declared
+        // `protected` for a `private` target, which only works because Mixin widens the target.
+        EntityRenderState entityRenderState = this.minecraft.getEntityRenderDispatcher().extractEntity(player, playerPartialTick);
+
+        if (!(entityRenderState instanceof AvatarRenderState avatarRenderState)) {
+            // Vanilla only ever extracts the local player here, which is always an avatar. Flashback
+            // replaces that with an arbitrary spectated entity, and here that entity produced some other
+            // render state. Vanilla's answer is to take the whole game down; the right answer is to render
+            // the normal first-person view for this frame and report it once so the cause is visible.
+            if (Flashback.warnedAboutSpectateRenderState.compareAndSet(false, true)) {
+                Flashback.LOGGER.error("Expected an AvatarRenderState while spectating '{}' ({} / type {}), but got {} (renderer {}) - " +
+                    "falling back to the local player's first person view",
+                    player.getName().getString(), player.getClass().getName(), player.getType(),
+                    entityRenderState == null ? "null" : entityRenderState.getClass().getName(), describeRenderer(player));
+            }
+            return;
+        }
+
         ci.cancel();
 
         state.reset();
 
         state.hasPlayer = true;
-        float playerPartialTick = deltaTracker.getGameTimeDeltaPartialTick(!this.level.tickRateManager().isEntityFrozen(player));
-        EntityRenderState entityRenderState = this.extractEntity(player, playerPartialTick);
-        if (entityRenderState instanceof AvatarRenderState) {
-            AvatarRenderState avatarRenderState = (AvatarRenderState)entityRenderState;
-            state.avatarRenderState = avatarRenderState;
-            ((RemotePlayerExt)player).flashback$extractFirstPersonHandsAndItems(playerPartialTick, state.firstPersonHandsAndItems);
-            state.portalEffectIntensity = 0.0f; // Mth.lerp(worldPartialTicks, player.oPortalEffectIntensity, player.portalEffectIntensity);
-            state.nauseaEffectIntensity = player.getEffectBlendFactor(MobEffects.NAUSEA, worldPartialTicks);
-            state.spinningEffectAngle = 0.0f; //player.getSpinningEffectAngle(worldPartialTicks);
-            state.isUnderWater = player.isUnderWater();
-            state.eyePositionY = player.getEyePosition(worldPartialTicks).y;
+        state.avatarRenderState = avatarRenderState;
+        ((RemotePlayerExt)player).flashback$extractFirstPersonHandsAndItems(playerPartialTick, state.firstPersonHandsAndItems);
+        state.portalEffectIntensity = 0.0f; // Mth.lerp(worldPartialTicks, player.oPortalEffectIntensity, player.portalEffectIntensity);
+        state.nauseaEffectIntensity = player.getEffectBlendFactor(MobEffects.NAUSEA, worldPartialTicks);
+        state.spinningEffectAngle = 0.0f; //player.getSpinningEffectAngle(worldPartialTicks);
+        state.isUnderWater = player.isUnderWater();
+        state.eyePositionY = player.getEyePosition(worldPartialTicks).y;
 
 //            if (player.itemActivation().isActive()) {
 //                ItemActivation activation = player.itemActivation();
@@ -91,28 +103,34 @@ public abstract class MixinLevelExtractor {
 //                state.itemActivation = activationState;
 //            }
 
-            if (camera.entity() instanceof LivingEntity livingEntity && livingEntity.isSleeping()) {
-                return;
+        if (camera.entity() instanceof LivingEntity livingEntity && livingEntity.isSleeping()) {
+            return;
+        }
+
+        BlockState viewBlockingState = flashbackGetViewBlockingState(player, camera.getCullFrustum());
+        if (viewBlockingState != null) {
+            TextureAtlasSprite sprite = this.minecraft.getModelManager().getBlockStateModelSet().getParticleMaterial(viewBlockingState).sprite();
+            state.blockOverlay = new PlayerRenderState.BlockOverlay(sprite.atlasLocation(), sprite.getU0(), sprite.getV0(), sprite.getU1(), sprite.getV1());
+        }
+
+        if (this.minecraft.options.getCameraType().isFirstPerson()) {
+            state.isEyeInWater = player.isEyeInFluid(FluidTags.WATER);
+            state.isOnFire = player.isOnFire();
+            if (state.isEyeInWater) {
+                BlockPos eyePos = BlockPos.containing(player.getEyePosition());
+                float brightness = Lightmap.getBrightness(player.level().dimensionType(), player.level().getMaxLocalRawBrightness(eyePos));
+                state.waterOverlay = new PlayerRenderState.WaterOverlay(ARGB.colorFromFloat(0.1F, brightness, brightness, brightness), -player.getYRot() / 64.0F, player.getXRot() / 64.0F);
             }
 
-            BlockState viewBlockingState = flashbackGetViewBlockingState(player, camera.getCullFrustum());
-            if (viewBlockingState != null) {
-                TextureAtlasSprite sprite = this.minecraft.getModelManager().getBlockStateModelSet().getParticleMaterial(viewBlockingState).sprite();
-                state.blockOverlay = new PlayerRenderState.BlockOverlay(sprite.atlasLocation(), sprite.getU0(), sprite.getV0(), sprite.getU1(), sprite.getV1());
-            }
+        }
+    }
 
-            if (this.minecraft.options.getCameraType().isFirstPerson()) {
-                state.isEyeInWater = player.isEyeInFluid(FluidTags.WATER);
-                state.isOnFire = player.isOnFire();
-                if (state.isEyeInWater) {
-                    BlockPos eyePos = BlockPos.containing(player.getEyePosition());
-                    float brightness = Lightmap.getBrightness(player.level().dimensionType(), player.level().getMaxLocalRawBrightness(eyePos));
-                    state.waterOverlay = new PlayerRenderState.WaterOverlay(ARGB.colorFromFloat(0.1F, brightness, brightness, brightness), -player.getYRot() / 64.0F, player.getXRot() / 64.0F);
-                }
-
-            }
-        } else {
-            throw new IllegalStateException("Expected an AvatarRenderState for the local player");
+    @Unique
+    private static String describeRenderer(AbstractClientPlayer player) {
+        try {
+            return String.valueOf(Minecraft.getInstance().getEntityRenderDispatcher().getRenderer(player).getClass().getName());
+        } catch (Throwable t) {
+            return "unavailable (" + t + ")";
         }
     }
 

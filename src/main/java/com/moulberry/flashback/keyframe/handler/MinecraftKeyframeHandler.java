@@ -1,10 +1,13 @@
 package com.moulberry.flashback.keyframe.handler;
 
 import com.moulberry.flashback.keyframe.change.*;
+import com.moulberry.flashback.Flashback;
+import com.moulberry.flashback.playback.ReplayServer;
 import com.moulberry.flashback.state.EditorState;
 import com.moulberry.flashback.state.EditorStateManager;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.phys.Vec3;
 import org.joml.Vector3d;
 
@@ -30,24 +33,55 @@ public record MinecraftKeyframeHandler(Minecraft minecraft) implements KeyframeH
 
     @Override
     public void applySpectate(java.util.UUID target) {
-        LocalPlayer player = this.minecraft.player;
+        Minecraft minecraft = this.minecraft;
+        LocalPlayer player = minecraft.player;
         if (player == null) {
             return;
         }
-        if (target == null) {
-            // Back to the replay's own viewpoint.
-            if (this.minecraft.getCameraEntity() != player) {
-                this.minecraft.setCameraEntity(player);
+
+        // Resolve the target on the client so the camera changes on this exact frame. During an export
+        // the client and server are stepped by hand and the packet the server sends back may not be
+        // handled until a later frame, which is why this cannot rely on the server alone.
+        Entity clientTarget = player;
+        if (target != null && minecraft.level != null) {
+            Entity entity = minecraft.level.getEntities().get(target);
+            if (entity != null) {
+                clientTarget = entity;
             }
+        }
+
+        if (minecraft.getCameraEntity() != clientTarget) {
+            minecraft.setCameraEntity(clientTarget);
+        }
+
+        // Tell the server as well, using the requested target rather than what the client managed to
+        // resolve. The server is the side that can keep retrying, and it remembers who is being
+        // spectated so that it re-sends the camera whenever the recorded entity is removed or replaced -
+        // which happens constantly while a replay ticks, and is what stopped the camera going stale.
+        ReplayServer replayServer = Flashback.getReplayServer();
+        if (replayServer != null) {
+            replayServer.requestSpectate(target);
+        }
+    }
+
+    /**
+     * Leaves any spectated entity, both on this client and on the replay server. Idempotent, and cheap
+     * enough to call every tick.
+     */
+    public void stopSpectating() {
+        Minecraft minecraft = this.minecraft;
+        LocalPlayer player = minecraft.player;
+        if (player == null) {
             return;
         }
-        if (this.minecraft.level == null) {
-            return;
+
+        if (minecraft.getCameraEntity() != player) {
+            minecraft.setCameraEntity(player);
         }
-        // An unknown UUID (a player who left the recording) must not throw mid-export.
-        net.minecraft.world.entity.Entity entity = this.minecraft.level.getEntities().get(target);
-        if (entity != null) {
-            this.minecraft.setCameraEntity(entity);
+
+        ReplayServer replayServer = Flashback.getReplayServer();
+        if (replayServer != null) {
+            replayServer.requestSpectate(null);
         }
     }
 
@@ -59,9 +93,7 @@ public record MinecraftKeyframeHandler(Minecraft minecraft) implements KeyframeH
             // The command needs a server round-trip, and an export advances the server by hand on a
             // frozen tick, so the command was often never processed - which is why switching from a
             // spectated player back to a camera did not take effect.
-            if (this.minecraft.getCameraEntity() != this.minecraft.player) {
-                this.minecraft.setCameraEntity(this.minecraft.player);
-            }
+            this.stopSpectating();
 
             player.snapTo(position.x, position.y, position.z, (float) yaw, (float) pitch);
             player.getInterpolation().cancel();
