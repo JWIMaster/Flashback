@@ -1,9 +1,6 @@
 package com.moulberry.flashback.configuration;
 
 import com.moulberry.flashback.combo_options.AudioCodec;
-import com.moulberry.flashback.combo_options.CompressionLevel;
-import com.moulberry.flashback.combo_options.ProResProfile;
-import com.moulberry.flashback.combo_options.PixelDepth;
 import com.moulberry.flashback.combo_options.VideoCodec;
 import com.moulberry.flashback.combo_options.VideoContainer;
 
@@ -21,9 +18,6 @@ public class ForceDefaultExportSettings {
     public VideoCodec videoCodec = null;
     public String selectedVideoEncoder = null;
     public Boolean useMaximumBitrate = null;
-    public CompressionLevel compressionLevel = null;
-    public ProResProfile proresProfile = null;
-    public PixelDepth pixelDepth = null;
 
     public Boolean recordAudio = null;
     public Boolean transparentBackground = null;
@@ -59,15 +53,6 @@ public class ForceDefaultExportSettings {
         }
         if (this.useMaximumBitrate != null) {
             config.useMaximumBitrate = this.useMaximumBitrate;
-        }
-        if (this.compressionLevel != null) {
-            config.compressionLevel = this.compressionLevel;
-        }
-        if (this.proresProfile != null) {
-            config.proresProfile = this.proresProfile;
-        }
-        if (this.pixelDepth != null) {
-            config.pixelDepth = this.pixelDepth;
         }
         if (this.recordAudio != null) {
             config.recordAudio = this.recordAudio;

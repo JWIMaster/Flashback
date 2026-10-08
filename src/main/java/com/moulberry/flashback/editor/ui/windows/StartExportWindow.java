@@ -4,10 +4,7 @@ import com.moulberry.flashback.Flashback;
 import com.moulberry.flashback.Utils;
 import com.moulberry.flashback.combo_options.AspectRatio;
 import com.moulberry.flashback.combo_options.AudioCodec;
-import com.moulberry.flashback.combo_options.CompressionLevel;
 import com.moulberry.flashback.combo_options.ExportProjection;
-import com.moulberry.flashback.combo_options.PixelDepth;
-import com.moulberry.flashback.combo_options.ProResProfile;
 import com.moulberry.flashback.combo_options.Sizing;
 import com.moulberry.flashback.combo_options.VideoCodec;
 import com.moulberry.flashback.combo_options.VideoContainer;
@@ -19,7 +16,6 @@ import com.moulberry.flashback.state.EditorStateManager;
 import com.moulberry.flashback.editor.ui.ImGuiHelper;
 import com.moulberry.flashback.exporting.ExportJob;
 import com.moulberry.flashback.exporting.ExportSettings;
-import com.moulberry.flashback.exporting.VideoEncoder;
 import com.moulberry.flashback.playback.ReplayServer;
 import com.moulberry.flashback.utils.AsyncFileDialogs;
 import imgui.moulberry90.ImGui;
@@ -378,198 +374,17 @@ public class StartExportWindow {
 
         }
 
-        // ProRes exposes profile selection. Profiles, not bitrate, are what change ProRes file
-        // size - the profile is a fixed data rate for a given resolution and framerate. Every other
-        // codec keeps pixelDepth/proresProfile null so its selection is untouched.
-        if (config.internalExport.videoCodec == VideoCodec.PRO_RES) {
-            ProResProfile activeProfile = renderProResProfile(config);
-
-            // Bit depth is not an independent ProRes setting: it follows the profile. prores_ks
-            // accepts only 10-bit pixel formats (all 8-bit and 12-bit planar variants are
-            // rejected), while VideoToolbox reaches 12-bit solely through 4444 XQ. So we derive
-            // the depth from the profile rather than offering a second, contradictory control.
-            VideoEncoder.Selection selection = activeProfile.isExplicit()
-                ? VideoEncoder.selectProResWithProfile(config.internalExport.videoCodec.getEncoders(), activeProfile)
-                : VideoEncoder.select(config.internalExport.videoCodec.getEncoders(), null);
-
-            config.internalExport.pixelDepth = selection.depth();
-
-            if (selection.isValid()) {
-                ProResProfile effective = activeProfile.isExplicit()
-                    ? activeProfile
-                    : VideoEncoder.profileForDepth(selection.depth());
-
-                ImGui.pushTextWrapPos();
-                ImGui.textColored(0xFFAAAAAA, I18n.get("flashback.prores_format_info")
-                    + " " + effective.text()
-                    + "  |  " + (selection.hardware() ? I18n.get("flashback.hardware_encoder") : I18n.get("flashback.software_encoder"))
-                    + (effective.isTwelveBit() ? "  |  12-bit" : "  |  10-bit"));
-                ImGui.popTextWrapPos();
-
-                if (!selection.hardware()) {
-                    ImGui.pushTextWrapPos();
-                    ImGui.textColored(0xFFFFAA00, I18n.get("flashback.prores_software_warning"));
-                    ImGui.popTextWrapPos();
+        if (config.internalExport.videoCodec != VideoCodec.GIF) {
+            if (ImGui.checkbox(I18n.get("flashback.use_maximum_bitrate"), config.internalExport.useMaximumBitrate)) {
+                config.internalExport.useMaximumBitrate = !config.internalExport.useMaximumBitrate;
+            }
+            if (!config.internalExport.useMaximumBitrate) {
+                ImGui.inputText(I18n.get("flashback.bitrate"), bitrate);
+                if (ImGui.isItemDeactivatedAfterEdit()) {
+                    int numBitrate = stringToBitrate(ImGuiHelper.getString(bitrate));
+                    bitrate.set(bitrateToString(numBitrate));
                 }
             }
-        } else if (config.internalExport.videoCodec == VideoCodec.H265) {
-            // HEVC can genuinely encode both 8-bit and 10-bit (the hardware encoder advertises
-            // nv12/yuv420p for 8-bit and p010le for Main 10), so the depth is an explicit choice
-            // rather than something derived from a profile.
-            config.internalExport.proresProfile = null;
-            resolvePixelDepth(config, config.internalExport.videoCodec, VideoEncoder.selectableDepths(
-                config.internalExport.videoCodec.getEncoders()));
-        } else {
-            config.internalExport.pixelDepth = null;
-            config.internalExport.proresProfile = null;
-        }
-
-        if (config.internalExport.videoCodec == VideoCodec.PRO_RES) {
-            ProResProfile activeProfile = renderProResProfile(config);
-
-            // Bit depth is not an independent ProRes setting: it follows the profile. prores_ks
-            // accepts only 10-bit pixel formats (all 8-bit and 12-bit planar variants are
-            // rejected), while VideoToolbox reaches 12-bit solely through 4444 XQ. So we derive
-            // the depth from the profile rather than offering a second, contradictory control.
-            VideoEncoder.Selection selection = activeProfile.isExplicit()
-                ? VideoEncoder.selectProResWithProfile(config.internalExport.videoCodec.getEncoders(), activeProfile)
-                : VideoEncoder.select(config.internalExport.videoCodec.getEncoders(), null);
-
-            config.internalExport.pixelDepth = selection.depth();
-
-            if (selection.isValid()) {
-                ProResProfile effective = activeProfile.isExplicit()
-                    ? activeProfile
-                    : VideoEncoder.profileForDepth(selection.depth());
-
-                ImGui.pushTextWrapPos();
-                ImGui.textColored(0xFFAAAAAA, I18n.get("flashback.prores_format_info")
-                    + " " + effective.text()
-                    + "  |  " + (selection.hardware() ? I18n.get("flashback.hardware_encoder") : I18n.get("flashback.software_encoder"))
-                    + (effective.isTwelveBit() ? "  |  12-bit" : "  |  10-bit"));
-                ImGui.popTextWrapPos();
-
-                if (!selection.hardware()) {
-                    ImGui.pushTextWrapPos();
-                    ImGui.textColored(0xFFFFAA00, I18n.get("flashback.prores_software_warning"));
-                    ImGui.popTextWrapPos();
-                }
-            }
-        } else if (config.internalExport.videoCodec == VideoCodec.H265) {
-            // HEVC can genuinely encode both 8-bit and 10-bit (the hardware encoder advertises
-            // nv12/yuv420p for 8-bit and p010le for Main 10), so the depth is an explicit choice
-            // rather than something derived from a profile.
-            config.internalExport.proresProfile = null;
-            resolvePixelDepth(config, config.internalExport.videoCodec, VideoEncoder.selectableDepths(
-                config.internalExport.videoCodec.getEncoders()));
-        } else {
-            config.internalExport.pixelDepth = null;
-            config.internalExport.proresProfile = null;
-        }
-
-        if (config.internalExport.videoCodec == VideoCodec.PRO_RES) {
-            ProResProfile activeProfile = renderProResProfile(config);
-
-            // Bit depth is not an independent ProRes setting: it follows the profile. prores_ks
-            // accepts only 10-bit pixel formats (all 8-bit and 12-bit planar variants are
-            // rejected), while VideoToolbox reaches 12-bit solely through 4444 XQ. So we derive
-            // the depth from the profile rather than offering a second, contradictory control.
-            VideoEncoder.Selection selection = activeProfile.isExplicit()
-                ? VideoEncoder.selectProResWithProfile(config.internalExport.videoCodec.getEncoders(), activeProfile)
-                : VideoEncoder.select(config.internalExport.videoCodec.getEncoders(), null);
-
-            config.internalExport.pixelDepth = selection.depth();
-
-            if (selection.isValid()) {
-                ProResProfile effective = activeProfile.isExplicit()
-                    ? activeProfile
-                    : VideoEncoder.profileForDepth(selection.depth());
-
-                ImGui.pushTextWrapPos();
-                ImGui.textColored(0xFFAAAAAA, I18n.get("flashback.prores_format_info")
-                    + " " + effective.text()
-                    + "  |  " + (selection.hardware() ? I18n.get("flashback.hardware_encoder") : I18n.get("flashback.software_encoder"))
-                    + (effective.isTwelveBit() ? "  |  12-bit" : "  |  10-bit"));
-                ImGui.popTextWrapPos();
-
-                if (!selection.hardware()) {
-                    ImGui.pushTextWrapPos();
-                    ImGui.textColored(0xFFFFAA00, I18n.get("flashback.prores_software_warning"));
-                    ImGui.popTextWrapPos();
-                }
-            }
-        } else if (config.internalExport.videoCodec == VideoCodec.H265) {
-            // HEVC can genuinely encode both 8-bit and 10-bit (the hardware encoder advertises
-            // nv12/yuv420p for 8-bit and p010le for Main 10), so the depth is an explicit choice
-            // rather than something derived from a profile.
-            config.internalExport.proresProfile = null;
-            resolvePixelDepth(config, config.internalExport.videoCodec, VideoEncoder.selectableDepths(
-                config.internalExport.videoCodec.getEncoders()));
-        } else {
-            config.internalExport.pixelDepth = null;
-            config.internalExport.proresProfile = null;
-        }
-
-        if (config.internalExport.videoCodec == VideoCodec.PRO_RES) {
-            ProResProfile activeProfile = renderProResProfile(config);
-
-            // Bit depth is not an independent ProRes setting: it follows the profile. prores_ks
-            // accepts only 10-bit pixel formats (all 8-bit and 12-bit planar variants are
-            // rejected), while VideoToolbox reaches 12-bit solely through 4444 XQ. So we derive
-            // the depth from the profile rather than offering a second, contradictory control.
-            VideoEncoder.Selection selection = activeProfile.isExplicit()
-                ? VideoEncoder.selectProResWithProfile(config.internalExport.videoCodec.getEncoders(), activeProfile)
-                : VideoEncoder.select(config.internalExport.videoCodec.getEncoders(), null);
-
-            config.internalExport.pixelDepth = selection.depth();
-
-            if (selection.isValid()) {
-                ProResProfile effective = activeProfile.isExplicit()
-                    ? activeProfile
-                    : VideoEncoder.profileForDepth(selection.depth());
-
-                ImGui.pushTextWrapPos();
-                ImGui.textColored(0xFFAAAAAA, I18n.get("flashback.prores_format_info")
-                    + " " + effective.text()
-                    + "  |  " + (selection.hardware() ? I18n.get("flashback.hardware_encoder") : I18n.get("flashback.software_encoder"))
-                    + (effective.isTwelveBit() ? "  |  12-bit" : "  |  10-bit"));
-                ImGui.popTextWrapPos();
-
-                if (!selection.hardware()) {
-                    ImGui.pushTextWrapPos();
-                    ImGui.textColored(0xFFFFAA00, I18n.get("flashback.prores_software_warning"));
-                    ImGui.popTextWrapPos();
-                }
-            }
-        } else if (config.internalExport.videoCodec == VideoCodec.H265) {
-            // HEVC can genuinely encode both 8-bit and 10-bit (the hardware encoder advertises
-            // nv12/yuv420p for 8-bit and p010le for Main 10), so the depth is an explicit choice
-            // rather than something derived from a profile.
-            config.internalExport.proresProfile = null;
-            resolvePixelDepth(config, config.internalExport.videoCodec, VideoEncoder.selectableDepths(
-                config.internalExport.videoCodec.getEncoders()));
-        } else {
-            config.internalExport.pixelDepth = null;
-            config.internalExport.proresProfile = null;
-        }
-
-        if (config.internalExport.videoCodec == VideoCodec.PRO_RES) {
-            // ProRes has no bitrate and no quality knob - the profile alone sets the data rate, so
-            // showing either control here would imply an effect that does not exist.
-            ImGui.pushTextWrapPos();
-            ImGui.textColored(0xFFAAAAAA, I18n.get("flashback.prores_bitrate_note"));
-            ImGui.popTextWrapPos();
-        } else if (config.internalExport.videoCodec != VideoCodec.GIF) {
-            if (config.internalExport.compressionLevel == null) {
-                config.internalExport.compressionLevel = CompressionLevel.BALANCED;
-            }
-
-            // One rate control, not two. Hardware encoders ignore quality/QSCALE entirely (verified:
-            // global_quality yields byte-identical output at every value), so bitrate is the only
-            // lever that actually works. The presets scale the automatic budget so they keep
-            // adapting to resolution and framerate; "Manual" exposes the absolute bitrate instead,
-            // and the two are mutually exclusive so nothing is silently overridden.
-            renderRateControl(config);
         } else {
             ImGui.pushTextWrapPos();
             ImGui.textColored(0xFFFFFFFF, I18n.get("flashback.gif_output_warning"));
@@ -577,155 +392,14 @@ public class StartExportWindow {
         }
     }
 
-    /**
-     * Resolves which output bit depths are actually deliverable, updates the config, and shows the
-     * selector.
-     *
-     * <p>Depths are resolved through {@link VideoEncoder}, which confirms a depth by opening the
-     * encoder rather than trusting its advertised pixel formats. That distinction matters here:
-     * {@code prores_ks} advertises no 12-bit format at all, while {@code prores_videotoolbox}
-     * reaches 12-bit only through Apple's {@code p416le}. Hardware encoders are tried first, so the
-     * exported file gets the 12-bit capability that software cannot provide.
-     */
-    private static PixelDepth resolvePixelDepth(FlashbackConfigV1 config, VideoCodec codec, PixelDepth[] offered) {
-        PixelDepth[] depths = offered;
-
-        PixelDepth resolved;
-        if (depths.length == 0) {
-            resolved = null;
-        } else if (config.internalExport.pixelDepth != null && Arrays.asList(depths).contains(config.internalExport.pixelDepth)) {
-            resolved = config.internalExport.pixelDepth;
-        } else {
-            // Default to 10-bit: broadly compatible, and materially smaller than 12-bit, while
-            // still giving real headroom over 8-bit.
-            resolved = Arrays.asList(depths).contains(PixelDepth.BIT_10) ? PixelDepth.BIT_10 : depths[0];
-        }
-
-        config.internalExport.pixelDepth = resolved;
-
-        if (resolved != null) {
-            if (depths.length > 1) {
-                resolved = ImGuiHelper.enumCombo(I18n.get("flashback.pixel_depth"), resolved, depths);
-                config.internalExport.pixelDepth = resolved;
-            } else {
-                ImGuiHelper.combo(I18n.get("flashback.pixel_depth"), new int[]{0}, new String[]{resolved.text()});
-            }
-        }
-
-        return resolved;
-    }
-
-    /**
-     * Shows the ProRes profile picker. Only encoders that honour the profile option get the full
-     * list; the software encoder ignores it entirely, so it is limited to the two profiles it can
-     * actually reach through its pixel format.
-     */
-    private static ProResProfile renderProResProfile(FlashbackConfigV1 config) {
-        String[] candidates = config.internalExport.videoCodec.getEncoders();
-
-        boolean hardwareAvailable = false;
-        for (String encoder : candidates) {
-            if (VideoEncoder.isHardwareEncoder(encoder)) {
-                hardwareAvailable = true;
-                break;
-            }
-        }
-
-        ProResProfile current = config.internalExport.proresProfile;
-        if (current == null) {
-            current = ProResProfile.AUTO;
-        }
-        if (!current.isExplicit() && !hardwareAvailable) {
-            // Nothing that honours profiles; let the label describe the derived profile instead.
-            current = ProResProfile.HQ;
-        }
-
-        ProResProfile selected = ImGuiHelper.enumCombo(I18n.get("flashback.prores_profile"), current,
-            ProResProfile.menuEntries(hardwareAvailable));
-
-        if (selected == null) {
-            selected = ProResProfile.AUTO;
-        }
-
-        config.internalExport.proresProfile = selected.isExplicit() ? selected : null;
-
-        if (selected.isExplicit()) {
-            ImGui.pushTextWrapPos();
-            ImGui.textColored(0xFFAAAAAA, I18n.get("flashback.prores_profile_datareate") + " "
-                + Math.round(selected.relativeDataRate() * 100) + "%");
-            ImGui.popTextWrapPos();
-        }
-
-        return selected;
-    }
-
-    /** The "Manual" entry appended to the quality presets, since it is not a scale factor. */
-    private static final String MANUAL_BITRATE_ENTRY = "Manual";
-
-    /** True when the user chose to type an absolute bitrate rather than pick a preset. */
-    private static boolean isManualBitrate(FlashbackConfigV1 config) {
-        return config.internalExport.useMaximumBitrate;
-    }
-
-    /**
-     * Draws the single rate control: a quality preset list (with a Manual entry) or, when Manual is
-     * chosen, the bitrate field. The preset is a scale on the automatic budget; Manual is an
-     * absolute value. Only one is ever live.
-     */
-    private static void renderRateControl(FlashbackConfigV1 config) {
-        boolean manual = isManualBitrate(config);
-
-        String[] entries = new String[CompressionLevel.values().length + 1];
-        for (int i = 0; i < CompressionLevel.values().length; i++) {
-            entries[i] = CompressionLevel.values()[i].text();
-        }
-        entries[entries.length - 1] = MANUAL_BITRATE_ENTRY;
-
-        int currentIndex = manual ? entries.length - 1 : config.internalExport.compressionLevel.ordinal();
-        int[] index = new int[]{currentIndex};
-        ImGuiHelper.combo(I18n.get("flashback.compression_level"), index, entries);
-
-        if (index[0] != currentIndex) {
-            if (index[0] == entries.length - 1) {
-                config.internalExport.useMaximumBitrate = true;
-            } else {
-                config.internalExport.useMaximumBitrate = false;
-                config.internalExport.compressionLevel = CompressionLevel.values()[index[0]];
-            }
-        }
-
-        if (config.internalExport.useMaximumBitrate) {
-            ImGui.inputText(I18n.get("flashback.bitrate"), bitrate);
-            if (ImGui.isItemDeactivatedAfterEdit()) {
-                int parsed = stringToBitrate(ImGuiHelper.getString(bitrate));
-                if (parsed > 0) {
-                    bitrate.set(bitrateToString(parsed));
-                }
-            }
-        } else {
-            int[] resolution = config.internalExport.resolution;
-            long budget = automaticBitrateBudget(resolution[0], resolution[1],
-                Math.max(1f, config.internalExport.framerate[0]));
-            long effective = Math.max(1_000_000L,
-                Math.round(budget * config.internalExport.compressionLevel.bitrateRatio()));
-            ImGui.pushTextWrapPos();
-            ImGui.textColored(0xFFAAAAAA, I18n.get("flashback.effective_bitrate") + " "
-                + bitrateToString((int) effective));
-            ImGui.popTextWrapPos();
-        }
-    }
-
-    /**
-     * Mirrors the encoder's automatic bitrate budget: 8 bits per pixel per second, capped at
-     * 288 Mbps (the libopenh264 ceiling). Shown to the user so a "quality" preset has a visible
-     * meaning in Mbps rather than being an opaque multiplier.
-     */
-    static long automaticBitrateBudget(int width, int height, double framerate) {
-        long perPixel = (long) width * height * 8L;
-        return Math.min(288_000_000L, 4096L + (long) (perPixel * framerate));
-    }
-
     private static CompletableFuture<ExportSettings> createExportSettings(@Nullable String name, FlashbackConfigV1 config) {
+        int numBitrate;
+        if (config.internalExport.useMaximumBitrate) {
+            numBitrate = 0;
+        } else {
+            numBitrate = stringToBitrate(ImGuiHelper.getString(bitrate));
+        }
+
         String defaultName = getDefaultFilename(name, config.internalExport.container.extension(), config);
 
         Function<String, ExportSettings> callback = pathStr -> {
@@ -776,49 +450,7 @@ public class StartExportWindow {
                 if (useVideoCodec == null || !Arrays.asList(codecs).contains(useVideoCodec)) {
                     useVideoCodec = codecs[0];
                 }
-                boolean usePixelDepth = useVideoCodec == VideoCodec.PRO_RES || useVideoCodec == VideoCodec.H265;
-                PixelDepth depth = usePixelDepth ? config.internalExport.pixelDepth : null;
-
-                // Quality is resolved here, once, into the single bitrate value the writer uses.
-                // An explicit bitrate in the config still wins if one was preserved.
-                boolean explicitBitrate = config.internalExport.useMaximumBitrate;
-                int resolvedBitrate;
-                if (explicitBitrate) {
-                    resolvedBitrate = stringToBitrate(ImGuiHelper.getString(bitrate));
-                    if (resolvedBitrate <= 0) {
-                        resolvedBitrate = 0;
-                    }
-                } else {
-                    CompressionLevel level = config.internalExport.compressionLevel != null
-                        ? config.internalExport.compressionLevel
-                        : CompressionLevel.BALANCED;
-                    long budget = automaticBitrateBudget(config.internalExport.resolution[0],
-                        config.internalExport.resolution[1], Math.max(1f, config.internalExport.framerate[0]));
-                    resolvedBitrate = (int) Math.max(1_000_000L, Math.round(budget * level.bitrateRatio()));
-                }
-
-                ProResProfile profile = usePixelDepth ? config.internalExport.proresProfile : null;
-                boolean explicitProfile = profile != null && profile.isExplicit();
-
-                // ProRes: the profile decides format and depth. HEVC: the user's explicit 8/10-bit
-                // choice must be honoured exactly, so use the depth-exact selection and only fall
-                // back to the generic path if nothing can provide it.
-                VideoEncoder.Selection selection;
-                if (explicitProfile) {
-                    selection = VideoEncoder.selectProResWithProfile(useVideoCodec.getEncoders(), profile);
-                } else if (useVideoCodec == VideoCodec.H265 && depth != null) {
-                    selection = VideoEncoder.selectWithDepth(useVideoCodec.getEncoders(), depth);
-                    if (!selection.isValid()) {
-                        selection = VideoEncoder.select(useVideoCodec.getEncoders(), depth);
-                    }
-                } else {
-                    selection = VideoEncoder.select(useVideoCodec.getEncoders(), depth);
-                }
-
-                String encoder = selection.isValid()
-                    ? selection.encoder()
-                    : getSelectedEncoderForCodecWithDepth(config, useVideoCodec, depth);
-                String pixelFormatName = usePixelDepth && selection.isValid() ? selection.pixelFormat() : null;
+                String encoder = getSelectedEncoderForCodec(config, useVideoCodec);
 
                 AudioCodec useAudioCodec = config.internalExport.audioCodec;
                 if (!config.internalExport.recordAudio || config.internalExport.container.getSupportedAudioCodecs().length == 0) {
@@ -832,10 +464,7 @@ public class StartExportWindow {
                     config.internalExport.resolution[0], config.internalExport.resolution[1], start, end,
                     config.internalExport.projection, config.internalExport.orthographicZoom[0],
                     Math.max(1, config.internalExport.framerate[0]), config.internalExport.resetRng, config.internalExport.depthMap,
-                    config.internalExport.container, useVideoCodec, encoder, depth, pixelFormatName,
-                    explicitProfile ? profile : null,
-                    resolvedBitrate,
-                    transparent, config.internalExport.ssaa, config.internalExport.noGui,
+                    config.internalExport.container, useVideoCodec, encoder, numBitrate, transparent, config.internalExport.ssaa, config.internalExport.noGui,
                     config.internalExport.stereoAudio, useAudioCodec,
                     path, ImGuiHelper.getString(pngSequenceFormat));
             }
@@ -853,23 +482,27 @@ public class StartExportWindow {
 
     }
 
-    /**
-     * Resolves the encoder actually used for a codec, preferring hardware acceleration but only
-     * where it can genuinely deliver the requested depth. Returns null when the codec has no
-     * usable encoder.
-     */
-    private static String getSelectedEncoderForCodecWithDepth(FlashbackConfigV1 config, VideoCodec useVideoCodec, @Nullable PixelDepth depth) {
+    private static String getSelectedEncoderForCodec(FlashbackConfigV1 config, VideoCodec useVideoCodec) {
         String[] validEncoders = useVideoCodec.getEncoders();
         if (validEncoders == null || validEncoders.length == 0) {
             return null;
         }
 
-        VideoEncoder.Selection selection = VideoEncoder.select(validEncoders, depth);
-        if (selection.isValid()) {
-            return selection.encoder();
+        String encoder = config.internalExport.selectedVideoEncoder;
+        boolean isValidEncoder = false;
+        for (String validEncoder : validEncoders) {
+            if (validEncoder.equals(encoder)) {
+                isValidEncoder = true;
+                break;
+            }
         }
-
-        return validEncoders[0];
+        if (!isValidEncoder) {
+            encoder = null;
+        }
+        if (encoder == null) {
+            encoder = validEncoders[0];
+        }
+        return encoder;
     }
 
     public static @NotNull String getDefaultFilename(@Nullable String name, String extension, FlashbackConfigV1 config) {

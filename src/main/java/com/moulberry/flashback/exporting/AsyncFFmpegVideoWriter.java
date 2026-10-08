@@ -3,9 +3,6 @@ package com.moulberry.flashback.exporting;
 import com.moulberry.flashback.Flashback;
 import com.moulberry.flashback.SneakyThrow;
 import com.moulberry.flashback.combo_options.AudioCodec;
-import com.moulberry.flashback.combo_options.PixelDepth;
-import com.moulberry.flashback.combo_options.ProResProfile;
-import com.moulberry.flashback.combo_options.VideoCodec;
 import org.bytedeco.ffmpeg.avutil.AVFrame;
 import org.bytedeco.ffmpeg.avutil.AVPixFmtDescriptor;
 import org.bytedeco.ffmpeg.global.avcodec;
@@ -71,37 +68,10 @@ public class AsyncFFmpegVideoWriter implements AutoCloseable, VideoWriter {
 
             boolean wantTransparency = settings.transparent();
 
-            boolean hdr = HdrExportBridge.active();
-
-            // For HDR the encoder must take a 10-bit format. The candidates span encoder families:
-            // libx265/libsvtav1 report yuv420p10le while the hardware encoders (VideoToolbox, NVENC)
-            // report p010le, so checking only one family makes the others look 8-bit-only.
-            int hdrPixelFormat = -1;
-            if (hdr) {
-                int[] hdrCandidates = {
-                    avutil.AV_PIX_FMT_YUV420P10LE,
-                    avutil.AV_PIX_FMT_P010LE,
-                    avutil.AV_PIX_FMT_YUV420P12LE,
-                };
-                for (int candidate : hdrCandidates) {
-                    if (PixelFormatHelper.supportsPixelFormat(settings.encoder(), candidate)) {
-                        hdrPixelFormat = candidate;
-                        break;
-                    }
-                }
-                if (hdrPixelFormat < 0) {
-                    Flashback.LOGGER.warn("HDR export requested but encoder {} offers no 10-bit format "
-                        + "(tried yuv420p10le / p010le / yuv420p12le); falling back to SDR", settings.encoder());
-                }
-            }
-
-            int dstPixelFormat = hdrPixelFormat >= 0
-                ? hdrPixelFormat
-                : PixelFormatHelper.getBestPixelFormat(settings.encoder(), srcPixelFormat, wantTransparency, settings.pixelFormatName());
-            Flashback.LOGGER.info("Starting export. Container={}. Codec={}. Encoder={}, Format={}{}",
+            int dstPixelFormat = PixelFormatHelper.getBestPixelFormat(settings.encoder(), srcPixelFormat, wantTransparency);
+            Flashback.LOGGER.info("Starting export. Container={}. Codec={}. Encoder={}, Format={}",
                 settings.container().text(), settings.codec().text(),
-                settings.encoder(), PixelFormatHelper.pixelFormatToString(dstPixelFormat),
-                hdrPixelFormat >= 0 ? " (HDR)" : "");
+                settings.encoder(), PixelFormatHelper.pixelFormatToString(dstPixelFormat));
 
             int width = settings.resolutionX();
             int height = settings.resolutionY();
@@ -140,10 +110,6 @@ public class AsyncFFmpegVideoWriter implements AutoCloseable, VideoWriter {
                 maxBitrate = Math.min(100_000_000, maxBitrate);
             }
 
-            // The caller resolves quality into a concrete bitrate, so there is exactly one rate
-            // control. Values above the encoder's safe ceiling are clamped; 0 means "use the
-            // automatic budget". Note this is ignored entirely by ProRes, which has a fixed data
-            // rate per profile.
             int bitrate;
             if (settings.bitrate() <= 0) {
                 bitrate = maxBitrate;
@@ -178,28 +144,6 @@ public class AsyncFFmpegVideoWriter implements AutoCloseable, VideoWriter {
             }
             if (settings.encoder().equals("exr")) {
                 recorder.setVideoOption("compression", "zip1");
-            }
-            if (hdrPixelFormat >= 0) {
-                // Colour metadata for HDR: BT.2020 primaries, PQ (ST 2084) transfer, non-constant
-                // luminance matrix and full range. Passing these as codec options puts them on the
-                // stream before the muxer writes the header, so the file is tagged HDR with no
-                // post-processing step.
-                recorder.setVideoOption("color_primaries", "bt2020");
-                recorder.setVideoOption("color_trc", "smpte2084");
-                recorder.setVideoOption("colorspace", "bt2020nc");
-                recorder.setVideoOption("color_range", "pc");
-            }
-            // ProRes needs an explicit profile or the encoder silently negotiates down (12-bit
-            // would land as 10-bit, and the requested profile would be ignored). If the user chose a
-            // profile we use it; otherwise we derive one from the verified bit depth.
-
-            if (settings.codec() == VideoCodec.PRO_RES) {
-                ProResProfile profile = settings.proresProfile();
-                if (profile == null) {
-                    boolean twelveBit = settings.pixelDepth() == PixelDepth.BIT_12;
-                    profile = twelveBit ? ProResProfile.XQ : ProResProfile.P4444;
-                }
-                recorder.setVideoProfile(profile.profileId());
             }
             if (settings.bitrate() == 0) {
                 if (settings.encoder().endsWith("_nvenc")) {
@@ -311,9 +255,6 @@ public class AsyncFFmpegVideoWriter implements AutoCloseable, VideoWriter {
         Flashback.LOGGER.info("Rescaling to pixel format: {}", PixelFormatHelper.pixelFormatToString(dstPixelFormat));
 
         boolean useItu709Colorspace = PixelFormatHelper.isYuvFormat(dstPixelFormat);
-        // HDR conversion must use BT.2020 coefficients, not BT.709, or the colours are wrong even
-        // though the metadata says BT.2020.
-        boolean useBt2020Colorspace = HdrExportBridge.active();
 
         Thread scaleThread = new Thread(() -> {
             SwsContext img_convert_ctx = null;
@@ -339,11 +280,7 @@ public class AsyncFFmpegVideoWriter implements AutoCloseable, VideoWriter {
                         throw new RuntimeException("sws_getCachedContext() error: Cannot initialize the conversion context.");
                     }
 
-                    if (useBt2020Colorspace) {
-                        IntPointer coefficients = swscale.sws_getCoefficients(swscale.SWS_CS_BT2020);
-                        // full-range output for HDR
-                        swscale.sws_setColorspaceDetails(img_convert_ctx, coefficients, 1, coefficients, 1, 0, 1 << 16, 1 << 16);
-                    } else if (useItu709Colorspace) {
+                    if (useItu709Colorspace) {
                         IntPointer coefficients = swscale.sws_getCoefficients(swscale.SWS_CS_ITU709);
                         swscale.sws_setColorspaceDetails(img_convert_ctx, coefficients, 1, coefficients, 0, 0, 1 << 16, 1 << 16);
                     }
@@ -489,18 +426,13 @@ public class AsyncFFmpegVideoWriter implements AutoCloseable, VideoWriter {
             return;
         }
 
-        // tryStart() sets 'started' before recorder.start(), so a failed start leaves the
-        // queues null. Guard rather than throwing a NullPointerException that would mask the
-        // real encoder error.
         if (this.rescaleQueue != null) {
             for (ImageFrame src : this.rescaleQueue) {
                 src.close();
             }
         }
-        if (this.encodeQueue != null) {
-            for (ImageFrame src : this.encodeQueue) {
-                src.close();
-            }
+        for (ImageFrame src : this.encodeQueue) {
+            src.close();
         }
 
         this.finishRescaleThread.set(true);

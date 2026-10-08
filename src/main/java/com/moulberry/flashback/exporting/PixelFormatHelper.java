@@ -13,50 +13,37 @@ import org.bytedeco.ffmpeg.global.avcodec;
 import org.bytedeco.ffmpeg.global.avutil;
 import org.bytedeco.javacpp.BytePointer;
 import org.bytedeco.javacpp.IntPointer;
-import org.jetbrains.annotations.Nullable;
 
 import java.util.HashMap;
 import java.util.Map;
 
 public class PixelFormatHelper {
 
-    private record BestFormatKey(String codec, int srcPixelFormat, boolean transparent, @Nullable String preferredPixelFormat) {}
+    private record BestFormatKey(String codec, int srcPixelFormat, boolean transparent) {}
     private static final Map<BestFormatKey, Integer> bestPixelFormats = new HashMap<>();
 
-    public static int getBestPixelFormat(String codecName, int srcPixelFormat, boolean transparent, @Nullable String preferredPixelFormatName) {
-        int preferred = preferredPixelFormatName != null
-            ? pixelFormatByName(preferredPixelFormatName)
-            : avutil.AV_PIX_FMT_NONE;
-
-        BestFormatKey key = new BestFormatKey(codecName, srcPixelFormat, transparent, preferredPixelFormatName);
+    public static int getBestPixelFormat(String codecName, int srcPixelFormat, boolean transparent) {
+        BestFormatKey key = new BestFormatKey(codecName, srcPixelFormat, transparent);
 
         if (bestPixelFormats.containsKey(key)) {
             return bestPixelFormats.get(key);
         }
 
-        int bestPixelFormat = calculateBestPixelFormat(codecName, srcPixelFormat, transparent, preferred);
+        int bestPixelFormat = calculateBestPixelFormat(codecName, srcPixelFormat, transparent);
 
         if (bestPixelFormat == avutil.AV_PIX_FMT_NONE) {
             throw new RuntimeException("Unable to determine best alternate pixel format for " + codecName);
         }
         if (bestPixelFormat != avutil.AV_PIX_FMT_YUV420P) {
-            Flashback.LOGGER.info("Chose to use pixel format {} for codec {} with transparent={}, srcPixelFormat={}, preferred={}",
-                pixelFormatToString(bestPixelFormat), codecName, transparent, pixelFormatToString(srcPixelFormat), preferredPixelFormatName);
+            Flashback.LOGGER.info("Chose to use pixel format {} for codec {} with transparent={} and srcPixelFormat={}",
+                pixelFormatToString(bestPixelFormat), codecName, transparent, pixelFormatToString(srcPixelFormat));
         }
 
         bestPixelFormats.put(key, bestPixelFormat);
         return bestPixelFormat;
     }
 
-    private static int pixelFormatByName(String name) {
-        try {
-            return avutil.av_get_pix_fmt(name);
-        } catch (Throwable t) {
-            return avutil.AV_PIX_FMT_NONE;
-        }
-    }
-
-    private static int calculateBestPixelFormat(String codecName, int srcPixelFormat, boolean transparent, int preferredPixelFormat) {
+    private static int calculateBestPixelFormat(String codecName, int srcPixelFormat, boolean transparent) {
         try (AVCodec codec = avcodec.avcodec_find_encoder_by_name(codecName)) {
             IntList supportedFormats = new IntArrayList();
 
@@ -74,20 +61,12 @@ public class PixelFormatHelper {
                     break;
                 }
 
-                if (!transparent && preferredPixelFormat == avutil.AV_PIX_FMT_NONE && pixFmt == avutil.AV_PIX_FMT_YUV420P) {
+                if (!transparent && pixFmt == avutil.AV_PIX_FMT_YUV420P) {
                     return avutil.AV_PIX_FMT_YUV420P;
                 }
 
                 supportedFormats.add(pixFmt);
                 index += 1;
-            }
-
-            // An explicitly chosen pixel format wins, provided the encoder really offers it. It was
-            // verified by opening the encoder before being written into the export settings.
-            if (preferredPixelFormat != avutil.AV_PIX_FMT_NONE && supportedFormats.contains(preferredPixelFormat)) {
-                Flashback.LOGGER.info("Using selected pixel format {} for encoder {}",
-                    pixelFormatToString(preferredPixelFormat), codecName);
-                return preferredPixelFormat;
             }
 
             supportedFormats.add(avutil.AV_PIX_FMT_NONE);
@@ -100,32 +79,6 @@ public class PixelFormatHelper {
             }
 
             return avcodec.avcodec_find_best_pix_fmt_of_list(supportedFormats.toIntArray(), srcPixelFormat, 0, new int[1]);
-        }
-    }
-
-    /** Overload for callers with no explicit pixel-format preference. */
-    public static int getBestPixelFormat(String codecName, int srcPixelFormat, boolean transparent) {
-        return getBestPixelFormat(codecName, srcPixelFormat, transparent, null);
-    }
-
-    /**
-     * Whether {@code encoderName} advertises {@code pixelFormat}. Used to pick a 10-bit format for
-     * HDR, where the candidate list spans encoders that report different families.
-     */
-    public static boolean supportsPixelFormat(String encoderName, int pixelFormat) {
-        try (AVCodec codec = avcodec.avcodec_find_encoder_by_name(encoderName)) {
-            if (codec == null || codec.isNull() || codec.pix_fmts() == null) {
-                return false;
-            }
-            for (int i = 0; ; i++) {
-                int format = codec.pix_fmts().get(i);
-                if (format == -1) {
-                    return false;
-                }
-                if (format == pixelFormat) {
-                    return true;
-                }
-            }
         }
     }
 

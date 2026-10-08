@@ -165,7 +165,7 @@ public enum VideoCodec implements ComboOption {
             AVRational time_base = av_inv_q(frameRate);
             codecContext.time_base(time_base);
 
-            int pixelFormat = PixelFormatHelper.getBestPixelFormat(codec.name().getString(), AV_PIX_FMT_RGBA, false, null);
+            int pixelFormat = PixelFormatHelper.getBestPixelFormat(codec.name().getString(), AV_PIX_FMT_RGBA, false);
             codecContext.pix_fmt(pixelFormat);
 
             if (pixelFormat == AV_PIX_FMT_VULKAN || pixelFormat == AV_PIX_FMT_OPENCL) {

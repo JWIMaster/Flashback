@@ -4,12 +4,9 @@ import com.google.gson.JsonObject;
 import com.moulberry.flashback.Flashback;
 import com.moulberry.flashback.FlashbackGson;
 import com.moulberry.flashback.combo_options.AudioCodec;
-import com.moulberry.flashback.combo_options.CompressionLevel;
 import com.moulberry.flashback.combo_options.ExportProjection;
 import com.moulberry.flashback.combo_options.MarkerColour;
 import com.moulberry.flashback.combo_options.MovementDirection;
-import com.moulberry.flashback.combo_options.PixelDepth;
-import com.moulberry.flashback.combo_options.ProResProfile;
 import com.moulberry.flashback.combo_options.RecordingControlsLocation;
 import com.moulberry.flashback.combo_options.VideoCodec;
 import com.moulberry.flashback.combo_options.VideoContainer;
@@ -331,13 +328,6 @@ public class FlashbackConfigV1 {
         public VideoCodec videoCodec = null;
         public String selectedVideoEncoder = null;
         public boolean useMaximumBitrate = false;
-        public CompressionLevel compressionLevel = CompressionLevel.BALANCED;
-        /** Null means "let the encoder choose", i.e. derive the profile from the bit depth. */
-        public ProResProfile proresProfile = null;
-
-        // Only meaningful for codecs offering more than one output bit depth (currently ProRes).
-        // Null means "let the export pick the default for the chosen codec".
-        public PixelDepth pixelDepth = null;
 
         public boolean recordAudio = false;
         public boolean transparentBackground = false;
