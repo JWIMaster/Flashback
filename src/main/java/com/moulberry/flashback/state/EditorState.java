@@ -4,6 +4,13 @@ import com.mojang.authlib.GameProfile;
 import com.moulberry.flashback.FilePlayerSkin;
 import com.moulberry.flashback.Flashback;
 import com.moulberry.flashback.FlashbackGson;
+import com.moulberry.flashback.keyframe.CameraSource;
+import com.moulberry.flashback.keyframe.Keyframe;
+import com.moulberry.flashback.keyframe.impl.CameraSwitchKeyframe;
+import com.moulberry.flashback.keyframe.impl.SpectateKeyframe;
+import com.moulberry.flashback.keyframe.types.SpectateKeyframeType;
+import com.moulberry.flashback.keyframe.types.TimelapseKeyframeType;
+import com.moulberry.flashback.keyframe.types.CameraSwitchKeyframeType;
 import com.moulberry.flashback.combo_options.GlowingOverride;
 import com.moulberry.flashback.configuration.FlashbackConfigV1;
 import com.moulberry.flashback.keyframe.change.KeyframeChange;
@@ -43,6 +50,21 @@ public class EditorState {
     private final List<EditorScene> scenes;
     private int sceneIndex = 0;
 
+    /**
+     * Cameras available to cut between. One is created per scene by {@link #migrateSchema()} so that
+     * projects saved before cameras existed keep working without the user doing anything.
+     */
+    public List<NamedCamera> cameras = new ArrayList<>();
+    /** Index into {@link #cameras} used for live preview in the editor. */
+    public int activeCameraIndex = 0;
+
+    /**
+     * Schema version of the persisted form. 0 means "written before cameras existed" - Gson leaves
+     * an absent int at 0, so old files are detected without any explicit marker.
+     */
+    public int schemaVersion = 0;
+    public static final int CURRENT_SCHEMA_VERSION = 1;
+
     public double zoomMin = 0.0;
     public double zoomMax = 1.0;
 
@@ -69,6 +91,12 @@ public class EditorState {
     public EditorState() {
         this.scenes = new ArrayList<>();
         this.scenes.add(new EditorScene("Scene 1"));
+
+        // A new project is already at the current schema and starts with one camera.
+        this.schemaVersion = CURRENT_SCHEMA_VERSION;
+        this.cameras = new ArrayList<>();
+        this.cameras.add(new NamedCamera("Camera 1"));
+        this.activeCameraIndex = 0;
 
         FlashbackConfigV1 config = Flashback.getConfig();
         if (config.internal.enableOverrideFovByDefault) {
@@ -178,7 +206,14 @@ public class EditorState {
         String serialized = null;
         try {
             serialized = Files.readString(path);
-            return FlashbackGson.COMPRESSED.fromJson(serialized, EditorState.class);
+            EditorState loaded = FlashbackGson.COMPRESSED.fromJson(serialized, EditorState.class);
+            if (loaded != null && loaded.migrateSchema()) {
+                // Mark dirty so the upgrade persists through the normal save path, which takes a
+                // backup before overwriting. Writing here directly would clobber the user's project
+                // with no backup, which is exactly what we must not do to someone's existing edits.
+                loaded.dirty = true;
+            }
+            return loaded;
         } catch (Exception e) {
             Flashback.LOGGER.error("Error loading editor state", e);
             Flashback.LOGGER.error("JSON: {}", serialized);
@@ -212,6 +247,246 @@ public class EditorState {
         return this.hideAllSpectators || !this.hideDuringExport.isEmpty();
     }
 
+    /**
+     * Applies a camera source immediately, without a keyframe, so the editor can preview the
+     * viewpoint the user just picked.
+     *
+     * @param tick the current replay tick, used to evaluate that camera's own tracks
+     */
+    public void previewCameraSource(CameraSource source) {
+        if (source == null) {
+            return;
+        }
+        float tick = com.moulberry.flashback.Flashback.getReplayServer() != null
+            ? com.moulberry.flashback.Flashback.getReplayServer().getReplayTick()
+            : 0.0f;
+        KeyframeHandler handler = new com.moulberry.flashback.keyframe.handler.MinecraftKeyframeHandler(
+            net.minecraft.client.Minecraft.getInstance());
+        this.applyCameraSourceToHandler(handler, source, tick);
+    }
+
+    /**
+     * Which viewpoint is live at {@code tick}: the source named by the most recent switch keyframe
+     * at or before it. A hard cut, so only the preceding keyframe matters - no interpolation.
+     *
+     * @return the active source, or null when no switch has occurred yet
+     */
+    @Nullable
+    public CameraSource resolveCameraSource(float tick) {
+        if (this.cameras == null) {
+            return null;
+        }
+
+        KeyframeTrack switchTrack = null;
+        for (KeyframeTrack track : this.currentScene().keyframeTracks) {
+            if (track.keyframeType == CameraSwitchKeyframeType.INSTANCE) {
+                switchTrack = track;
+                break;
+            }
+        }
+        if (switchTrack == null || switchTrack.keyframesByTick.isEmpty()) {
+            return null;
+        }
+
+        Map.Entry<Integer, Keyframe> entry = switchTrack.keyframesByTick.floorEntry((int) tick);
+        if (entry == null || !(entry.getValue() instanceof CameraSwitchKeyframe switchKeyframe)) {
+            return null;
+        }
+
+        CameraSource source = switchKeyframe.source;
+        if (source == null || source.sourceId() == null) {
+            return null;
+        }
+
+        // A switch may name a source that no longer exists (camera deleted, track removed). Fall
+        // back to the first camera rather than leaving the viewpoint undefined.
+        if (this.findSourceTrack(source.sourceId()) == null) {
+            NamedCamera camera = this.findCamera(null);
+            if (camera != null) {
+                return CameraSource.of(camera.id);
+            }
+            return null;
+        }
+        return source;
+    }
+
+    /** The camera with this id, or null. A null id means "the first camera". */
+    @Nullable
+    public NamedCamera findCamera(@Nullable UUID cameraId) {
+        if (this.cameras == null || this.cameras.isEmpty()) {
+            return null;
+        }
+        if (cameraId == null) {
+            return this.cameras.get(0);
+        }
+        for (NamedCamera camera : this.cameras) {
+            if (camera.id.equals(cameraId)) {
+                return camera;
+            }
+        }
+        return null;
+    }
+
+    /** The current scene's tracks, for display helpers that must not take the write lock. */
+    public java.util.List<KeyframeTrack> currentSceneTracks() {
+        return this.currentScene().keyframeTracks;
+    }
+
+    /** Any track belonging to this source: a camera track, or the spectate object itself. */
+    @Nullable
+    private KeyframeTrack findSourceTrack(UUID sourceId) {
+        for (KeyframeTrack track : this.currentScene().keyframeTracks) {
+            if (sourceId.equals(track.cameraId)) {
+                return track;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * True when this source id belongs to a non-camera object - a spectate or timelapse track.
+     *
+     * <p>Such a source owns the output itself: its own keyframes are applied rather than any camera
+     * tracks. Cameras are the other case, and are the tracks sharing an id that are camera-scoped.
+     */
+    private boolean isNonCameraSource(UUID sourceId) {
+        for (KeyframeTrack track : this.currentScene().keyframeTracks) {
+            if (!sourceId.equals(track.cameraId)) {
+                continue;
+            }
+            if (track.keyframeType instanceof SpectateKeyframeType
+                || track.keyframeType instanceof TimelapseKeyframeType) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Applies the active source's own camera-scoped tracks, plus any spectate target.
+     *
+     * <p>Normally a camera's tracks are reached through the scene's track loop, but a camera created
+     * by migration has no matching track on the scene, so its tracks are applied directly here.
+     * Duplicate application is harmless because the track loop's duplicate guard already skips a
+     * change type that has been applied.
+     */
+    private void applyCameraSourceToHandler(KeyframeHandler keyframeHandler, @Nullable CameraSource source, float tick) {
+        if (source == null) {
+            return;
+        }
+
+        UUID sourceId = source.sourceId();
+        if (sourceId == null) {
+            return;
+        }
+
+        // A spectate source owns the viewpoint: apply its keyframe, which says which player to follow.
+        if (this.isNonCameraSource(sourceId)) {
+            for (KeyframeTrack track : this.currentScene().keyframeTracks) {
+                if (!track.enabled || !sourceId.equals(track.cameraId)) {
+                    continue;
+                }
+                if (!track.keyframeType.supportsHandler(keyframeHandler)) {
+                    continue;
+                }
+                KeyframeChange change = track.createKeyframeChange(tick, this.realTimeMapping);
+                if (change != null) {
+                    change.apply(keyframeHandler);
+                }
+            }
+            return;
+        }
+
+        // Otherwise it is a camera. Leaving a spectated entity is part of switching to a camera:
+        // without this the view stays attached to the player and the camera's tracks are applied to
+        // something nobody is looking through. Idempotent, so it is safe every tick.
+        keyframeHandler.applySpectate(null);
+
+        for (KeyframeTrack track : this.currentScene().keyframeTracks) {
+            if (!track.enabled || !sourceId.equals(track.cameraId)) {
+                continue;
+            }
+            if (!track.keyframeType.supportsHandler(keyframeHandler)) {
+                continue;
+            }
+            KeyframeChange change = track.createKeyframeChange(tick, this.realTimeMapping);
+            if (change != null) {
+                change.apply(keyframeHandler);
+            }
+        }
+    }
+
+    /**
+     * Brings a loaded state up to the current schema, in place and idempotently.
+     *
+     * <p>Schema 0 -> 1 introduces cameras. Camera-scoped tracks (position, orbit, FOV, shake,
+     * entity-tracking) used to live on the scene; they now belong to a camera, so each scene that
+     * has such tracks gets its own camera holding them. Scene-scoped tracks (time of day, speed,
+     * freeze, audio, block overrides) stay on the scene, because those describe the world rather
+     * than a viewpoint and must not change when the camera cuts.
+     *
+     * <p>This is deliberately additive: nothing is discarded, so a project edited before this
+     * change opens with its animation intact rather than losing keyframes.
+     *
+     * @return true if anything was changed, so the caller can persist the upgraded form
+     */
+    public boolean migrateSchema() {
+        if (this.schemaVersion >= CURRENT_SCHEMA_VERSION) {
+            return false;
+        }
+
+        if (this.cameras == null) {
+            this.cameras = new ArrayList<>();
+        }
+
+        if (this.schemaVersion < 1) {
+            for (EditorScene scene : this.scenes) {
+                if (scene == null || scene.keyframeTracks == null) {
+                    continue;
+                }
+
+                List<KeyframeTrack> cameraScoped = new ArrayList<>();
+                for (KeyframeTrack track : scene.keyframeTracks) {
+                    if (track != null && track.keyframeType != null
+                        && NamedCamera.isCameraScoped(track)) {
+                        cameraScoped.add(track);
+                    }
+                }
+
+                // Only create a camera if the scene actually had camera animation, otherwise every
+                // scene would gain a redundant empty camera.
+                if (cameraScoped.isEmpty()) {
+                    continue;
+                }
+
+                String cameraName = scene.name != null && !scene.name.isBlank()
+                    ? scene.name
+                    : "Camera " + (this.cameras.size() + 1);
+                NamedCamera camera = new NamedCamera(cameraName);
+                this.cameras.add(camera);
+
+                // Tag in place: the tracks stay in the scene's track list, so they remain real
+                // timeline rows. The camera id is the only new information - no container, no
+                // parallel copy, nothing that can drift out of sync with the timeline.
+                for (KeyframeTrack track : cameraScoped) {
+                    if (track.cameraId == null) {
+                        track.cameraId = camera.id;
+                    }
+                }
+            }
+
+            // A project with no camera animation at all still needs one camera to be usable.
+            if (this.cameras.isEmpty()) {
+                this.cameras.add(new NamedCamera("Camera 1"));
+            }
+
+            this.activeCameraIndex = 0;
+        }
+
+        this.schemaVersion = CURRENT_SCHEMA_VERSION;
+        return true;
+    }
+
     public void applyKeyframes(KeyframeHandler keyframeHandler, float tick) {
         this.applyKeyframes(keyframeHandler, tick, 0);
     }
@@ -229,10 +504,30 @@ public class EditorState {
             unlock = true;
         }
         try {
+            CameraSource activeSource = this.resolveCameraSource(tick);
+            applyCameraSourceToHandler(keyframeHandler, activeSource, tick);
+
             for (KeyframeTrack keyframeTrack : this.currentScene().keyframeTracks) {
                 // Ignore lines that are disabled
                 if (!keyframeTrack.enabled) {
                     continue;
+                }
+
+                // The switch track is consumed by resolveCameraSource; applying it again here would
+                // re-apply the cut without its camera's tracks.
+                if (keyframeTrack.keyframeType == CameraSwitchKeyframeType.INSTANCE) {
+                    continue;
+                }
+
+                // Camera-scoped tracks from non-active cameras must not be evaluated, otherwise two
+                // viewpoints fight over the camera and the result depends on track order.
+                // Only filter when a switch is actually in force. With no switch keyframe at all we
+                // must behave exactly as before, or every existing project loses its camera
+                // animation - which is what happened when this skipped camera tracks outright.
+                if (keyframeTrack.cameraId != null && activeSource != null) {
+                    if (!keyframeTrack.cameraId.equals(activeSource.sourceId())) {
+                        continue;
+                    }
                 }
 
                 Class<? extends KeyframeChange> keyframeChangeType = keyframeTrack.keyframeType.keyframeChangeType();

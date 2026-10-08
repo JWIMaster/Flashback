@@ -4,6 +4,7 @@ import com.google.gson.JsonDeserializationContext;
 import com.google.gson.JsonDeserializer;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import org.jetbrains.annotations.Nullable;
 import com.google.gson.JsonParseException;
 import com.google.gson.JsonSerializationContext;
 import com.google.gson.JsonSerializer;
@@ -84,11 +85,16 @@ public interface EditorSceneHistoryAction {
         }
     }
 
-    record AddTrack(KeyframeType<?> type, int trackIndex) implements EditorSceneHistoryAction {
+    record AddTrack(KeyframeType<?> type, int trackIndex, @Nullable java.util.UUID cameraId) implements EditorSceneHistoryAction {
+
         @Override
         public void apply(EditorScene editorScene) {
             if (this.trackIndex <= editorScene.keyframeTracks.size()) {
-                editorScene.keyframeTracks.add(this.trackIndex, new KeyframeTrack(this.type));
+                KeyframeTrack track = new KeyframeTrack(this.type);
+                // Carried on the action so redo restores the track's camera too; otherwise a redone
+                // camera track would silently detach from its camera.
+                track.cameraId = this.cameraId;
+                editorScene.keyframeTracks.add(this.trackIndex, track);
             }
         }
 
@@ -98,7 +104,11 @@ public interface EditorSceneHistoryAction {
                 JsonObject jsonObject = json.getAsJsonObject();
                 KeyframeType<?> type = context.deserialize(jsonObject.get("keyframe_type"), KeyframeType.class);
                 int trackIndex = jsonObject.get("trackIndex").getAsInt();
-                return new AddTrack(type, trackIndex);
+                // Absent in history recorded before camera tagging existed.
+                java.util.UUID cameraId = jsonObject.has("cameraId") && !jsonObject.get("cameraId").isJsonNull()
+                    ? java.util.UUID.fromString(jsonObject.get("cameraId").getAsString())
+                    : null;
+                return new AddTrack(type, trackIndex, cameraId);
             }
 
             @Override
@@ -107,6 +117,9 @@ public interface EditorSceneHistoryAction {
                 jsonObject.addProperty("action_type", "add_track");
                 jsonObject.add("keyframe_type", context.serialize(src.type));
                 jsonObject.addProperty("trackIndex", src.trackIndex);
+                if (src.cameraId != null) {
+                    jsonObject.addProperty("cameraId", src.cameraId.toString());
+                }
                 return jsonObject;
             }
         }

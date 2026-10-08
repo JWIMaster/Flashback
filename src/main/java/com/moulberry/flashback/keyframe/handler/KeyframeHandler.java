@@ -39,5 +39,13 @@ public interface KeyframeHandler {
     default void applyCameraShake(float frequencyX, float amplitudeX, float frequencyY, float amplitudeY) {
     }
 
+    /**
+     * Points the camera at a player's first-person view, or back to the replay player when the
+     * target is null. The editor decides when this applies, based on which source the camera switch
+     * has selected.
+     */
+    default void applySpectate(@org.jetbrains.annotations.Nullable java.util.UUID target) {
+    }
+
 
 }

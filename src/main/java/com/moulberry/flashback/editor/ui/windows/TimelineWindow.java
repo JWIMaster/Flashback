@@ -22,6 +22,7 @@ import com.moulberry.flashback.state.EditorSceneHistoryEntry;
 import com.moulberry.flashback.keyframe.impl.TimelapseKeyframe;
 import com.moulberry.flashback.state.EditorStateManager;
 import com.moulberry.flashback.state.EditorState;
+import com.moulberry.flashback.state.NamedCamera;
 import com.moulberry.flashback.keyframe.Keyframe;
 import com.moulberry.flashback.keyframe.impl.CameraKeyframe;
 import com.moulberry.flashback.keyframe.interpolation.InterpolationType;
@@ -979,7 +980,7 @@ public class TimelineWindow {
 
         editorScene.push(new EditorSceneHistoryEntry(
             List.of(new EditorSceneHistoryAction.RemoveTrack(CameraKeyframeType.INSTANCE, index)),
-            List.of(new EditorSceneHistoryAction.AddTrack(CameraKeyframeType.INSTANCE, index)),
+            List.of(new EditorSceneHistoryAction.AddTrack(CameraKeyframeType.INSTANCE, index, null)),
             I18n.get("flashback.create_named_track", CameraKeyframeType.INSTANCE.name())));
         editorState.markDirty();
 
@@ -2028,7 +2029,9 @@ public class TimelineWindow {
 
                     if (keyframeType instanceof CameraKeyframeType && Minecraft.getInstance().player != Minecraft.getInstance().getCameraEntity()) {
                         ReplayUI.setInfoOverlay(I18n.get("flashback.camera_keyframes_not_needed"));
-                        Minecraft.getInstance().getConnection().sendCommand("spectate");
+                        // Direct, not /spectate: the command needs a server round-trip and is not
+                        // processed while the replay is stepping ticks.
+                        Minecraft.getInstance().setCameraEntity(Minecraft.getInstance().player);
                     }
                 }
                 drawList.addText(buttonX - 2, buttonY, -1, "\ue148");
@@ -2114,7 +2117,7 @@ public class TimelineWindow {
 
                 KeyframeTrack keyframeTrack = editorScene.keyframeTracks.get(keyframeTrackToDelete);
 
-                undo.add(new EditorSceneHistoryAction.AddTrack(keyframeTrack.keyframeType, keyframeTrackToDelete));
+                undo.add(new EditorSceneHistoryAction.AddTrack(keyframeTrack.keyframeType, keyframeTrackToDelete, null));
                 for (Map.Entry<Integer, Keyframe> entry : keyframeTrack.keyframesByTick.entrySet()) {
                     undo.add(new EditorSceneHistoryAction.SetKeyframe(keyframeTrack.keyframeType, keyframeTrackToDelete, entry.getKey(), entry.getValue().copy()));
                 }
@@ -2285,8 +2288,41 @@ public class TimelineWindow {
                     List<EditorSceneHistoryAction> redo = new ArrayList<>();
 
                     int index = editorScene.keyframeTracks.size();
+
+                    // A camera-scoped track belongs to the camera currently being worked on, so it
+                    // becomes part of that camera the moment it is added - the track is the camera.
+                    java.util.UUID cameraId = null;
+                    if (type instanceof com.moulberry.flashback.keyframe.types.SpectateKeyframeType
+                        || type instanceof com.moulberry.flashback.keyframe.types.TimelapseKeyframeType) {
+                        // A spectate or timelapse object is a source in its own right, so it gets a
+                        // fresh id rather than joining whichever camera is active.
+                        cameraId = java.util.UUID.randomUUID();
+                    } else if (type == CameraKeyframeType.INSTANCE) {
+                        // Adding a camera track IS adding a camera: it becomes a new viewpoint, not
+                        // another track on the current one. Without this, a second camera track just
+                        // joined the active camera and no new entry appeared in the camera switch.
+                        if (editorState.cameras == null) {
+                            editorState.cameras = new ArrayList<>();
+                        }
+                        NamedCamera camera = new NamedCamera(I18n.get("flashback.camera") + " " + (editorState.cameras.size() + 1));
+                        editorState.cameras.add(camera);
+                        editorState.activeCameraIndex = editorState.cameras.size() - 1;
+                        cameraId = camera.id;
+                    } else if (NamedCamera.isCameraScopedId(type.id())) {
+                        // FOV, orbit, shake and entity-tracking attach to the camera being worked on.
+                        if (editorState.cameras == null) {
+                            editorState.cameras = new ArrayList<>();
+                        }
+                        if (editorState.cameras.isEmpty()) {
+                            editorState.cameras.add(new NamedCamera(I18n.get("flashback.camera") + " 1"));
+                            editorState.activeCameraIndex = 0;
+                        }
+                        int active = Math.max(0, Math.min(editorState.cameras.size() - 1, editorState.activeCameraIndex));
+                        cameraId = editorState.cameras.get(active).id;
+                    }
+
                     undo.add(new EditorSceneHistoryAction.RemoveTrack(type, index));
-                    redo.add(new EditorSceneHistoryAction.AddTrack(type, index));
+                    redo.add(new EditorSceneHistoryAction.AddTrack(type, index, cameraId));
 
                     editorScene.push(new EditorSceneHistoryEntry(undo, redo, I18n.get("flashback.create_named_track", type.name())));
                     editorState.markDirty();

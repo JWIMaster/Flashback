@@ -194,6 +194,16 @@ public class CameraPath {
             fovHandler.fov = defaultFov;
             state.applyKeyframes(handler, args.lastCameraTick);
             state.applyKeyframes(fovHandler, args.lastCameraTick);
+            if (handler.position == null) {
+                return;
+            }
+
+            // A viewpoint with no camera position - spectating a player, for instance - legitimately
+            // has no camera path to draw. Bail out rather than dereferencing a null position; the
+            // earlier block already guarded this case but this one did not.
+            if (handler.position == null) {
+                return;
+            }
 
             renderCamera(bufferBuilder, handler.position.add(offset, new Vector3d()), handler.angle, fovHandler.fov,
                 getCameraColour(false, false), 1.0f);
@@ -202,6 +212,9 @@ public class CameraPath {
                 fovHandler.fov = defaultFov;
                 state.applyKeyframes(handler, args.lastLastCameraTick);
                 state.applyKeyframes(fovHandler, args.lastLastCameraTick);
+            if (handler.position == null) {
+                return;
+            }
 
                 renderCamera(bufferBuilder, handler.position.add(offset, new Vector3d()), handler.angle, fovHandler.fov,
                     getCameraColour(false, false), 0.6f);
@@ -213,6 +226,9 @@ public class CameraPath {
             fovHandler.fov = defaultFov;
             state.applyKeyframes(handler, args.nextCameraTick);
             state.applyKeyframes(fovHandler, args.nextCameraTick);
+            if (handler.position == null) {
+                return;
+            }
 
             renderCamera(bufferBuilder, handler.position.add(offset, new Vector3d()), handler.angle, fovHandler.fov,
                 getCameraColour(false, false), 1.0f);
@@ -221,6 +237,9 @@ public class CameraPath {
                 fovHandler.fov = defaultFov;
                 state.applyKeyframes(handler, args.nextNextCameraTick);
                 state.applyKeyframes(fovHandler, args.nextNextCameraTick);
+            if (handler.position == null) {
+                return;
+            }
 
                 renderCamera(bufferBuilder, handler.position.add(offset, new Vector3d()), handler.angle, fovHandler.fov,
                     getCameraColour(false, false), 0.6f);
@@ -251,6 +270,14 @@ public class CameraPath {
 
         for (int tick = fromTick; tick <= toTick; tick += step) {
             editorState.applyKeyframes(handler, tick);
+
+            // A tick whose source is a spectate object has no camera position, so there is no path
+            // segment to draw. Skip it instead of dereferencing null - this was the last unguarded
+            // use, and the one that crashed when a cut to a spectate fell between camera keyframes.
+            if (handler.position == null) {
+                lastPosition = null;
+                continue;
+            }
             Vector3d position = handler.position.add(offset, new Vector3d());
 
             if (lastPosition != null) {
