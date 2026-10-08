@@ -68,8 +68,6 @@ public final class GuiRecorder {
     private static boolean broken;
     @Nullable
     private static java.lang.reflect.Field hoveredSlotField;
-    @Nullable
-    private static java.lang.reflect.Field screenField;
     private static boolean complained;
 
     private GuiRecorder() {
@@ -229,14 +227,6 @@ public final class GuiRecorder {
             return;
         }
 
-        // The open screen is read here rather than being reported by a hook on Screen: a hook can be
-        // skipped silently by a version that renames or moves the method, and if the screen is never
-        // noticed then nothing at all is recorded. Asking once a tick cannot miss one.
-        Screen open = currentScreen();
-        if (open != currentScreen) {
-            screenChanged(open);
-        }
-
         if (!(currentScreen instanceof AbstractContainerScreen<?> containerScreen)) {
             return;
         }
@@ -297,47 +287,6 @@ public final class GuiRecorder {
         lastContainerId = -1;
         lastStacks.clear();
         lastStates.clear();
-    }
-
-    /**
-     * The screen the player is looking at, or null.
-     *
-     * <p>Read reflectively because the field's name is not part of any API, and a miss costs the
-     * recording rather than the game.
-     */
-    @Nullable
-    private static Screen currentScreen() {
-        try {
-            Object minecraft = Minecraft.getInstance();
-            if (minecraft == null) {
-                return null;
-            }
-            java.lang.reflect.Field field = screenField;
-            if (field == null) {
-                // Found by type rather than by name: the field the game keeps the open screen in has
-                // been called more than one thing, but it is always the one holding a Screen.
-                for (Class<?> type = minecraft.getClass(); type != null && field == null; type = type.getSuperclass()) {
-                    for (java.lang.reflect.Field candidate : type.getDeclaredFields()) {
-                        if (candidate.getType() == Screen.class
-                                && java.lang.reflect.Modifier.isStatic(candidate.getModifiers()) == false) {
-                            candidate.setAccessible(true);
-                            field = candidate;
-                            break;
-                        }
-                    }
-                }
-                if (field == null) {
-                    complainOnce("the current screen (no field of type Screen)");
-                    return null;
-                }
-                screenField = field;
-            }
-            Object screen = field.get(minecraft);
-            return screen instanceof Screen gameScreen ? gameScreen : null;
-        } catch (Throwable t) {
-            complainOnce("the current screen", t);
-            return null;
-        }
     }
 
     /**

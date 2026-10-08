@@ -322,10 +322,10 @@ public class FlashbackConfigV1 {
          * Whether the containers a replay recorded - chests, crafting tables, furnaces - are shown
          * when watching it back, instead of being skipped.
          *
-         * <p>Off by default: showing them is still being built, and a replay that does not ask for it
-         * must behave exactly as it always did.
+         * <p>The container is sent to the viewer's client and built there, so nothing on the replay's
+         * own thread touches a screen. Turning it off leaves a replay exactly as it was.
          */
-        public boolean showGuisInReplays = false;
+        public boolean showGuisInReplays = true;
     }
 
     public SubcategoryInternalExport internalExport = new SubcategoryInternalExport();
