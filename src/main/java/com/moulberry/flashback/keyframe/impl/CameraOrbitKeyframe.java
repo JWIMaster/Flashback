@@ -22,6 +22,9 @@ import org.joml.Vector3d;
 
 import java.lang.reflect.Type;
 import java.util.Map;
+import imgui.moulberry90.ImGui;
+import imgui.moulberry90.type.ImBoolean;
+
 import java.util.function.Consumer;
 
 public class CameraOrbitKeyframe extends Keyframe {
@@ -30,16 +33,27 @@ public class CameraOrbitKeyframe extends Keyframe {
     public float distance;
     public float yaw;
     public float pitch;
+    /**
+     * Whether the orbit is centred on whoever the camera is following, rather than on the stored
+     * point. Absent from older projects, where an orbit was always around a fixed point.
+     */
+    public boolean centreOnTarget;
 
     public CameraOrbitKeyframe(Vector3d center, float distance, float yaw, float pitch) {
         this(center, distance, yaw, pitch, InterpolationType.getDefault());
     }
 
     public CameraOrbitKeyframe(Vector3d center, float distance, float yaw, float pitch, InterpolationType interpolationType) {
+        this(center, distance, yaw, pitch, interpolationType, false);
+    }
+
+    public CameraOrbitKeyframe(Vector3d center, float distance, float yaw, float pitch,
+                               InterpolationType interpolationType, boolean centreOnTarget) {
         this.center = center;
         this.distance = distance;
         this.yaw = yaw;
         this.pitch = pitch;
+        this.centreOnTarget = centreOnTarget;
         this.interpolationType(interpolationType);
     }
 
@@ -50,13 +64,21 @@ public class CameraOrbitKeyframe extends Keyframe {
 
     @Override
     public Keyframe copy() {
-        return new CameraOrbitKeyframe(new Vector3d(this.center), this.distance, this.yaw, this.pitch, this.interpolationType());
+        return new CameraOrbitKeyframe(new Vector3d(this.center), this.distance, this.yaw, this.pitch,
+            this.interpolationType(), this.centreOnTarget);
     }
 
     @Override
     public void renderEditKeyframe(Consumer<Consumer<Keyframe>> update) {
+        ImBoolean followsTarget = new ImBoolean(this.centreOnTarget);
+        if (ImGui.checkbox(I18n.get("flashback.orbit_centre_on_player"), followsTarget)) {
+            boolean value = followsTarget.get();
+            update.accept(keyframe -> ((CameraOrbitKeyframe) keyframe).centreOnTarget = value);
+        }
+        ImGuiHelper.tooltip(I18n.get("flashback.orbit_centre_on_player_hint"));
+
         float[] center = new float[]{(float) this.center.x, (float) this.center.y, (float) this.center.z};
-        if (ImGuiHelper.inputFloat(I18n.get("flashback.position"), center)) {
+        if (!this.centreOnTarget && ImGuiHelper.inputFloat(I18n.get("flashback.position"), center)) {
             if (center[0] != this.center.x) {
                 update.accept(keyframe -> ((CameraOrbitKeyframe)keyframe).center.x = center[0]);
             }
@@ -87,13 +109,14 @@ public class CameraOrbitKeyframe extends Keyframe {
         }
     }
 
-    private static KeyframeChangeCameraPositionOrbit createChangeFrom(Vector3d center, float distance, float yaw, float pitch) {
-        return new KeyframeChangeCameraPositionOrbit(center, distance, yaw, pitch);
+    private static KeyframeChangeCameraPositionOrbit createChangeFrom(Vector3d center, float distance, float yaw,
+                                                                    float pitch, boolean centreOnTarget) {
+        return new KeyframeChangeCameraPositionOrbit(center, distance, yaw, pitch, centreOnTarget);
     }
 
     @Override
     public KeyframeChange createChange() {
-        return createChangeFrom(this.center, this.distance, this.yaw, this.pitch);
+        return createChangeFrom(this.center, this.distance, this.yaw, this.pitch, this.centreOnTarget);
     }
 
     @Override
@@ -115,7 +138,7 @@ public class CameraOrbitKeyframe extends Keyframe {
         float pitch = CatmullRom.value(this.pitch, ((CameraOrbitKeyframe)p1).pitch, ((CameraOrbitKeyframe)p2).pitch,
                 ((CameraOrbitKeyframe)p3).pitch, time1, time2, time3, amount);
 
-        return createChangeFrom(position, distance, yaw, pitch);
+        return createChangeFrom(position, distance, yaw, pitch, this.centreOnTarget);
     }
 
     @Override
@@ -127,7 +150,7 @@ public class CameraOrbitKeyframe extends Keyframe {
         double yaw = Hermite.value(Maps.transformValues(keyframes, k -> (double) ((CameraOrbitKeyframe)k).yaw), amount);
         double pitch = Hermite.value(Maps.transformValues(keyframes, k -> (double) ((CameraOrbitKeyframe)k).pitch), amount);
 
-        return createChangeFrom(position, (float) distance, (float) yaw, (float) pitch);
+        return createChangeFrom(position, (float) distance, (float) yaw, (float) pitch, this.centreOnTarget);
     }
 
     public static class TypeAdapter implements JsonSerializer<CameraOrbitKeyframe>, JsonDeserializer<CameraOrbitKeyframe> {
@@ -139,7 +162,8 @@ public class CameraOrbitKeyframe extends Keyframe {
             float yaw = jsonObject.get("yaw").getAsFloat();
             float pitch = jsonObject.get("pitch").getAsFloat();
             InterpolationType interpolationType = context.deserialize(jsonObject.get("interpolation_type"), InterpolationType.class);
-            return new CameraOrbitKeyframe(center, distance, yaw, pitch, interpolationType);
+            boolean centreOnTarget = jsonObject.has("centre_on_target") && jsonObject.get("centre_on_target").getAsBoolean();
+            return new CameraOrbitKeyframe(center, distance, yaw, pitch, interpolationType, centreOnTarget);
         }
 
         @Override
@@ -149,6 +173,10 @@ public class CameraOrbitKeyframe extends Keyframe {
             jsonObject.addProperty("distance", src.distance);
             jsonObject.addProperty("yaw", src.yaw);
             jsonObject.addProperty("pitch", src.pitch);
+            if (src.centreOnTarget) {
+                // Only written when set, so projects that predate it stay byte-for-byte familiar.
+                jsonObject.addProperty("centre_on_target", true);
+            }
             jsonObject.addProperty("type", "camera_orbit");
             jsonObject.add("interpolation_type", context.serialize(src.interpolationType()));
             return jsonObject;

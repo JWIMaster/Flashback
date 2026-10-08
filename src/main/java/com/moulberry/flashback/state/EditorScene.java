@@ -6,6 +6,7 @@ import com.moulberry.flashback.keyframe.types.CameraKeyframeType;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -309,6 +310,101 @@ public class EditorScene {
      * <p>Without this, deleting a camera would leave switches naming nothing, and the timeline would
      * show a cut to a camera that cannot be chosen again.
      */
+    /** Retimes a cut for preview purposes without touching the scene. */
+    public interface CutRetime {
+        int retime(int tick);
+    }
+
+    /**
+     * One camera shot: the stretch of the timeline where a single camera is the output.
+     *
+     * <p>Shots tile the whole timeline with no gaps, because a cut is a boundary rather than an
+     * object sitting between two shots. That is what makes "this camera is live from here to here"
+     * always true, and what makes dragging a boundary a well-defined edit.
+     *
+     * @param cutTick the cut that starts this shot, or -1 when the shot runs from the start of the
+     *                replay with no cut of its own
+     */
+    public record Shot(EditorCamera camera, int startTick, int endTick, int cutTick) {
+        public int duration() {
+            return this.endTick - this.startTick;
+        }
+    }
+
+    /**
+     * The shots that make up the timeline, in order.
+     *
+     * <p>{@code retime} lets a caller ask what the shots would look like if a boundary moved, which is
+     * how a drag previews itself without editing the scene.
+     */
+    public List<Shot> shots(int totalTicks) {
+        return this.shots(totalTicks, null);
+    }
+
+    public List<Shot> shots(int totalTicks, @Nullable CutRetime retime) {
+        List<Shot> shots = new ArrayList<>();
+        if (this.cameraList().isEmpty() || totalTicks <= 0) {
+            return shots;
+        }
+
+        // Every cut that resolves to a camera, ordered by where it will appear (a previewed drag
+        // may have moved it), remembering the tick the keyframe actually sits on.
+        record Cut(int atTick, int keyframeTick, EditorCamera camera) {}
+        List<Cut> cuts = new ArrayList<>();
+        KeyframeTrack switchTrack = this.cameraSwitchTrack();
+        if (switchTrack != null) {
+            for (Map.Entry<Integer, Keyframe> entry : switchTrack.keyframesByTick.entrySet()) {
+                if (!(entry.getValue() instanceof CameraSwitchKeyframe cut)) {
+                    continue;
+                }
+                EditorCamera camera = this.resolveCamera(cut.cameraId);
+                if (camera == null) {
+                    continue;
+                }
+                int tick = retime == null ? entry.getKey() : retime.retime(entry.getKey());
+                cuts.add(new Cut(Math.max(0, Math.min(totalTicks, tick)), entry.getKey(), camera));
+            }
+            cuts.sort(Comparator.comparingInt(Cut::atTick));
+        }
+
+        int start = 0;
+        int startCutTick = -1;
+        for (Cut cut : cuts) {
+            if (cut.atTick() > start) {
+                EditorCamera camera = this.resolveCameraAt(start);
+                if (camera != null) {
+                    shots.add(new Shot(camera, start, cut.atTick(), startCutTick));
+                }
+                start = cut.atTick();
+                startCutTick = cut.keyframeTick();
+            } else if (cut.atTick() == 0) {
+                // A cut on the very first tick starts the first shot rather than making an empty one.
+                startCutTick = cut.keyframeTick();
+            }
+        }
+        if (start < totalTicks) {
+            EditorCamera camera = this.resolveCameraAt(start);
+            if (camera == null && !cuts.isEmpty()) {
+                camera = cuts.get(cuts.size() - 1).camera();
+            }
+            if (camera != null) {
+                shots.add(new Shot(camera, start, totalTicks, startCutTick));
+            }
+        }
+        return shots;
+    }
+
+    /** The shot covering a tick, or null when there are no shots. */
+    @Nullable
+    public Shot shotAt(int tick, int totalTicks) {
+        for (Shot shot : this.shots(totalTicks)) {
+            if (tick >= shot.startTick() && tick < shot.endTick()) {
+                return shot;
+            }
+        }
+        return null;
+    }
+
     public void retargetOrphanedSwitches() {
         UUID fallback = this.cameraList().isEmpty() ? null : this.cameraList().get(0).id;
         for (KeyframeTrack track : this.trackList()) {

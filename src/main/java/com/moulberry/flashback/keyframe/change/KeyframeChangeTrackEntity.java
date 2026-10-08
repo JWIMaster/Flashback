@@ -74,6 +74,9 @@ public record KeyframeChangeTrackEntity(UUID target, TrackingBodyPart trackingBo
         offset.rotateX(Math.toRadians(-pitch));
         offset.rotateY(Math.toRadians(180-yaw));
 
+        // Remember the subject, so an orbit centred on what the camera follows turns around them.
+        keyframeHandler.setFollowedPosition(new Vector3d(limbPosition.x, limbPosition.y, limbPosition.z));
+
         Vector3d position = new Vector3d(
             limbPosition.x + this.positionOffset.x + offset.x,
             limbPosition.y + this.positionOffset.y + offset.y,

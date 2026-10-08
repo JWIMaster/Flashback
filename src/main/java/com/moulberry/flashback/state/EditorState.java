@@ -519,6 +519,10 @@ public class EditorState {
 
     @ApiStatus.Internal
     public void applyKeyframes(KeyframeHandler keyframeHandler, float tick, long stamp) {
+        // Whatever was followed before this pass is stale: only this pass's tracking keyframes say
+        // who the camera is following now, and an orbit centred on its subject must not inherit last
+        // frame's answer from a different camera.
+        keyframeHandler.setFollowedPosition(null);
         Set<Class<? extends KeyframeChange>> applied = new HashSet<>();
         Map<Class<? extends KeyframeChange>, KeyframeTrack> maybeApplyLastTick = new HashMap<>();
 

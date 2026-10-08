@@ -16,7 +16,51 @@ import org.joml.Vector3d;
 import java.util.Set;
 import java.util.UUID;
 
-public record MinecraftKeyframeHandler(Minecraft minecraft) implements KeyframeHandler {
+public class MinecraftKeyframeHandler implements KeyframeHandler {
+
+    private final Minecraft minecraft;
+    /**
+     * Where the camera is following, remembered from this pass's entity-tracking keyframes.
+     *
+     * <p>A class rather than a record because an apply pass has state: an orbit centred on its subject
+     * needs to know where that subject is, and the tracking keyframes in the same pass are what say.
+     */
+    private Vector3d followedPosition;
+
+    public MinecraftKeyframeHandler(Minecraft minecraft) {
+        this.minecraft = minecraft;
+    }
+
+    public Minecraft minecraft() {
+        return this.minecraft;
+    }
+
+    @Override
+    public void setFollowedPosition(Vector3d position) {
+        this.followedPosition = position;
+    }
+
+    @Override
+    public Vector3d followedPosition() {
+        return this.followedPosition;
+    }
+
+    @Override
+    public Vector3d subjectPosition() {
+        // The local player is the subject; the camera entity is the fallback, because during replay
+        // playback the local player is not always present while the camera entity always is.
+        LocalPlayer player = this.minecraft.player;
+        if (player != null) {
+            return eyeOf(player);
+        }
+        Entity camera = this.minecraft.getCameraEntity();
+        return camera == null ? null : eyeOf(camera);
+    }
+
+    private static Vector3d eyeOf(Entity entity) {
+        Vec3 eye = entity.getEyePosition();
+        return new Vector3d(eye.x, eye.y, eye.z);
+    }
 
     private static final Set<Class<? extends KeyframeChange>> supportedChanges = Set.of(
             KeyframeChangeCameraPosition.class, KeyframeChangeCameraPositionOrbit.class, KeyframeChangeTrackEntity.class,
@@ -27,6 +71,17 @@ public record MinecraftKeyframeHandler(Minecraft minecraft) implements KeyframeH
     @Override
     public Minecraft getMinecraft() {
         return this.minecraft;
+    }
+
+    @Override
+    public boolean alwaysApplyLastKeyframe() {
+        // A tick past a track's last keyframe produces no interpolated value, so without this the
+        // client simply stops applying that track. This handler is the only one that applies camera,
+        // orbit, entity-tracking, fov, shake and spectate changes, so a track with a single keyframe
+        // - a spectate camera, typically - would never take effect once the playhead moved past it.
+        // Holding the last keyframe is what the replay server already does, so this also makes the
+        // preview agree with playback.
+        return true;
     }
 
     @Override
@@ -101,22 +156,21 @@ public record MinecraftKeyframeHandler(Minecraft minecraft) implements KeyframeH
     @Override
     public void applySpectate(@Nullable UUID target) {
         Minecraft minecraft = this.minecraft;
-        LocalPlayer player = minecraft.player;
-        if (player == null) {
-            return;
-        }
 
         // Resolve on the client so the change lands this frame. An unknown UUID is left as "not
         // spectating" rather than throwing, because a recorded player may not exist in this replay.
-        Entity clientTarget = player;
+        Entity clientTarget = null;
         if (target != null) {
-            Entity entity = resolveClientEntity(minecraft, target);
-            if (entity != null) {
-                clientTarget = entity;
-            }
+            clientTarget = resolveClientEntity(minecraft, target);
+        }
+        if (clientTarget == null) {
+            // Back to the replay's own viewpoint. The local player is the usual answer, but it is not
+            // guaranteed to be present while a replay is being scrubbed, so this must not be the only
+            // route: when it is missing the camera entity already is that viewpoint.
+            clientTarget = minecraft.player != null ? minecraft.player : minecraft.getCameraEntity();
         }
 
-        if (minecraft.getCameraEntity() != clientTarget) {
+        if (clientTarget != null && minecraft.getCameraEntity() != clientTarget) {
             minecraft.setCameraEntity(clientTarget);
         }
 

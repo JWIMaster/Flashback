@@ -28,6 +28,8 @@ public final class EditorCamera {
     public enum Kind {
         /** A camera positioned by its own keyframes. */
         FREE,
+        /** A camera moved around a point, positioned by its orbit keyframes. */
+        ORBIT,
         /** A camera that follows a player, whose player is chosen by its spectate keyframes. */
         SPECTATE;
 
@@ -35,6 +37,7 @@ public final class EditorCamera {
         public List<KeyframeType<?>> trackTypes() {
             return switch (this) {
                 case FREE -> List.of(CameraKeyframeType.INSTANCE, CameraOrbitKeyframeType.INSTANCE, TrackEntityKeyframeType.INSTANCE);
+                case ORBIT -> List.of(CameraOrbitKeyframeType.INSTANCE, TrackEntityKeyframeType.INSTANCE);
                 case SPECTATE -> List.of(SpectateKeyframeType.INSTANCE);
             };
         }
