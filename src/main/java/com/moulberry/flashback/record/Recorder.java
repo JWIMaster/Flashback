@@ -16,6 +16,7 @@ import com.moulberry.flashback.action.*;
 import com.moulberry.flashback.compat.BobbyUtil;
 import com.moulberry.flashback.compat.DistantHorizonsSupport;
 import com.moulberry.flashback.ext.ClientClockManagerExt;
+import com.moulberry.flashback.gui.InventoryMenuSlots;
 import com.moulberry.flashback.io.AsyncReplaySaver;
 import com.moulberry.flashback.io.ReplayWriter;
 import com.moulberry.flashback.mixin.compat.bobby.FakeChunkManagerAccessor;
@@ -606,7 +607,8 @@ public class Recorder {
                 if (this.lastHotbarItems[i] == null || !ItemStack.matches(this.lastHotbarItems[i], hotbarItem)) {
                     ItemStack copied = hotbarItem.copy();
                     this.lastHotbarItems[i] = copied;
-                    gamePackets.add(new ClientboundContainerSetSlotPacket(0, 0, i, copied));
+                    // Container 0 uses InventoryMenu slot numbers, not inventory indices.
+                    gamePackets.add(new ClientboundContainerSetSlotPacket(0, 0, InventoryMenuSlots.hotbarMenuSlot(i), copied));
                 }
             }
         }
@@ -923,9 +925,6 @@ public class Recorder {
 
         if (asActualSnapshot) {
             this.asyncReplaySaver.submit(ReplayWriter::startSnapshot);
-            // A seek starts from a snapshot, so a recording has to say what was open at one: the
-            // packets that opened it may be behind the snapshot and never played again.
-            com.moulberry.flashback.gui.GuiRecording.onSnapshot();
         }
 
         if (this.lastRtcEpochMilli == 0) {
@@ -1142,7 +1141,7 @@ public class Recorder {
             for (int i = 0; i < 9; i++) {
                 ItemStack hotbarItem = localPlayer.getInventory().getItem(i);
                 this.lastHotbarItems[i] = hotbarItem.copy();
-                gamePackets.add(new ClientboundContainerSetSlotPacket(0, 0, i, hotbarItem.copy()));
+                gamePackets.add(new ClientboundContainerSetSlotPacket(0, 0, InventoryMenuSlots.hotbarMenuSlot(i), hotbarItem.copy()));
             }
         }
 
@@ -1219,6 +1218,14 @@ public class Recorder {
         }
 
         writeCustomSnapshot(gamePackets::add);
+
+        if (asActualSnapshot) {
+            // A seek starts here, not at the next tick. Keep this screen's opening and complete
+            // contents in the snapshot rather than emitting a second OPEN during normal playback.
+            for (var container : com.moulberry.flashback.gui.GuiRecording.snapshotState()) {
+                gamePackets.add(new ClientboundCustomPayloadPacket(container));
+            }
+        }
 
         this.asyncReplaySaver.writeGamePackets(this.gamePacketCodec, gamePackets);
 

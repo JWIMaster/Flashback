@@ -21,6 +21,7 @@ import net.minecraft.world.inventory.AbstractContainerMenu;
 import net.minecraft.world.inventory.CraftingContainer;
 import net.minecraft.world.inventory.InventoryMenu;
 import net.minecraft.world.inventory.MenuType;
+import net.minecraft.world.inventory.MerchantMenu;
 import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.ItemStack;
 import org.jetbrains.annotations.Nullable;
@@ -75,8 +76,6 @@ public final class GuiRecording {
     private static int mirroredId = -1;
     private static final List<ItemStack> mirrored = new ArrayList<>();
     private static ItemStack mirroredCarried = ItemStack.EMPTY;
-    /** Set when a snapshot is written, so the next tick restates what is open. */
-    private static volatile boolean restateOnTick;
 
     private GuiRecording() {
     }
@@ -86,7 +85,6 @@ public final class GuiRecording {
         lastShown = null;
         openTypes.clear();
         forgetMirror();
-        restateOnTick = false;
     }
 
     /**
@@ -97,7 +95,8 @@ public final class GuiRecording {
      * changes the server did not describe.
      */
     public static void observePacket(Packet<?> packet) {
-        if (mirroredId == -1 && openTypes.isEmpty() && !(packet instanceof ClientboundOpenScreenPacket)) {
+        if (mirroredId == -1 && openTypes.isEmpty() && !(packet instanceof ClientboundOpenScreenPacket)
+            && !(packet instanceof ClientboundMountScreenOpenPacket)) {
             return;
         }
         try {
@@ -125,9 +124,32 @@ public final class GuiRecording {
         }
     }
 
-    /** A snapshot was just written, so the next tick should restate what is open. */
-    public static void onSnapshot() {
-        restateOnTick = true;
+    /** The open screen's state belongs inside a seek snapshot, never in the following tick. */
+    public static List<FlashbackRemoteContainer> snapshotState() {
+        if (!recording()) {
+            return List.of();
+        }
+        Minecraft minecraft = Minecraft.getInstance();
+        Screen screen = minecraft == null || minecraft.gui == null ? null : minecraft.gui.screen();
+        if (!(screen instanceof AbstractContainerScreen<?> containerScreen)) {
+            return List.of();
+        }
+        AbstractContainerMenu menu = containerScreen.getMenu();
+        String kind = typeOf(menu);
+        if (kind == null) {
+            return List.of();
+        }
+        List<FlashbackRemoteContainer> state = new ArrayList<>(3);
+        state.add(FlashbackRemoteContainer.open(menu.containerId, kind, screen.getTitle()));
+        state.add(FlashbackRemoteContainer.content(menu.containerId, copyItems(menu), menu.getCarried().copy()));
+        if (menu instanceof MerchantMenu merchant) {
+            // The offers packet is behind the snapshot and a seek never plays it again, so a trade
+            // opened before the jump would come back with no rows in it.
+            state.add(FlashbackRemoteContainer.offers(menu.containerId, merchant.getOffers().copy(),
+                merchant.getTraderLevel(), merchant.getTraderXp(), merchant.showProgressBar(),
+                merchant.canRestock()));
+        }
+        return List.copyOf(state);
     }
 
     /** Once a tick, while a container screen is open. */
@@ -152,28 +174,10 @@ public final class GuiRecording {
                 fillMirror(menu.getItems(), menu.getCarried());
             }
 
-            if (restateOnTick) {
-                restateOnTick = false;
-                restate(menu, containerScreen);
-            }
             writeDifferences(menu);
         } catch (Throwable t) {
             Flashback.LOGGER.warn("Could not mirror the open container", t);
         }
-    }
-
-    /**
-     * Restates the open container in full, so that a seek which starts after its opening packet
-     * still finds it.
-     */
-    private static void restate(AbstractContainerMenu menu, AbstractContainerScreen<?> screen) {
-        String menuType = typeOf(menu);
-        if (menuType == null) {
-            return;
-        }
-        write(FlashbackRemoteContainer.open(menu.containerId, menuType, screen.getTitle()));
-        write(FlashbackRemoteContainer.content(menu.containerId, menu.getItems(), menu.getCarried()));
-        fillMirror(menu.getItems(), menu.getCarried());
     }
 
     /**
@@ -208,8 +212,6 @@ public final class GuiRecording {
                 // A copy, because the payload is not encoded until the end of the tick and the
                 // stack it describes belongs to a live menu.
                 write(FlashbackRemoteContainer.slot(menu.containerId, i, now.copy()));
-                if (!now.isEmpty()) {
-                }
             }
         }
     }
@@ -221,6 +223,14 @@ public final class GuiRecording {
             return FlashbackRemoteContainer.PLAYER_INVENTORY_TYPE;
         }
         return openTypes.get(menu.containerId);
+    }
+
+    private static List<ItemStack> copyItems(AbstractContainerMenu menu) {
+        List<ItemStack> items = new ArrayList<>(menu.getItems().size());
+        for (ItemStack stack : menu.getItems()) {
+            items.add(stack.copy());
+        }
+        return items;
     }
 
     private static void fillMirror(List<ItemStack> items, ItemStack carried) {
@@ -235,7 +245,6 @@ public final class GuiRecording {
         mirroredId = -1;
         mirrored.clear();
         mirroredCarried = ItemStack.EMPTY;
-        restateOnTick = false;
     }
 
     private static String nameOf(MenuType<?> menuType) {
@@ -267,7 +276,7 @@ public final class GuiRecording {
             // account of it: it names the container's kind, which the client cannot work out.
             write(FlashbackRemoteContainer.open(menu.containerId, FlashbackRemoteContainer.PLAYER_INVENTORY_TYPE,
                 screen.getTitle()));
-            write(FlashbackRemoteContainer.content(menu.containerId, menu.getItems(), menu.getCarried()));
+            write(FlashbackRemoteContainer.content(menu.containerId, copyItems(menu), menu.getCarried().copy()));
         } catch (Throwable t) {
             Flashback.LOGGER.warn("Could not record the screen {}", screen.getClass().getName(), t);
         }

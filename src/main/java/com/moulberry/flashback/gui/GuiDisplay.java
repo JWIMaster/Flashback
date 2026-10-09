@@ -30,9 +30,11 @@ import net.minecraft.world.inventory.AbstractMountInventoryMenu;
 import net.minecraft.world.inventory.HorseInventoryMenu;
 import net.minecraft.world.inventory.InventoryMenu;
 import net.minecraft.world.inventory.MenuType;
+import net.minecraft.world.inventory.MerchantMenu;
 import net.minecraft.world.inventory.NautilusInventoryMenu;
 import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.trading.MerchantOffers;
 import org.jetbrains.annotations.Nullable;
 
 import java.lang.reflect.Field;
@@ -111,6 +113,11 @@ public final class GuiDisplay {
                     menu.setCarried(container.carried().copy());
                 }
             }
+            case OFFERS -> {
+                if (container.containerId() == shownId) {
+                    applyOffers(container);
+                }
+            }
         }
     }
 
@@ -126,10 +133,18 @@ public final class GuiDisplay {
     }
 
     private static void open(FlashbackRemoteContainer container) {
+        String nextType = container.menuType() == null ? "" : container.menuType();
+        Component nextTitle = container.title() == null ? Component.empty() : container.title();
+        // Old recordings restate OPEN after a snapshot. Its following CONTENT refreshes the
+        // picture; rebuilding the identical screen here makes it blink and lose transient state.
+        if (shownId == container.containerId() && menu != null && screen != null
+            && menuType.equals(nextType) && title.equals(nextTitle)) {
+            return;
+        }
         clear();
         shownId = container.containerId();
-        menuType = container.menuType() == null ? "" : container.menuType();
-        title = container.title() == null ? Component.empty() : container.title();
+        menuType = nextType;
+        title = nextTitle;
 
         if (!menuType.isEmpty()) {
             build();
@@ -232,13 +247,30 @@ public final class GuiDisplay {
         menu.setCarried(carriedItem == null ? ItemStack.EMPTY : carriedItem.copy());
     }
 
-    private static void applySlot(int slot, ItemStack item) {
-        // DIAGNOSTIC (temporary): the armour is menu slots 5-8, and this is where anything the
-        // recording says is in them arrives. Only these few slots, so it cannot flood anything.
-        if (slot >= 5 && slot <= 8) {
-            com.moulberry.flashback.Flashback.LOGGER.info("[armour-diag] menuSlot={} item={} container={}",
-                slot, item, shownId);
+    /**
+     * Puts a merchant's trades into the detached menu, which is where its screen reads them from.
+     *
+     * <p>A villager's rows are not slots. The menu has one payment slot and one result slot, and the
+     * list of trades the screen draws - with their costs, results and remaining uses - is this. So
+     * without it the trading screen opens with every row blank.
+     *
+     * <p>Only a merchant menu is touched: the payload is addressed to a container, and a container
+     * that is not a merchant has nothing to do with offers.
+     */
+    private static void applyOffers(FlashbackRemoteContainer container) {
+        if (!(menu instanceof MerchantMenu merchant)) {
+            return;
         }
+        // Copies for the same reason the contents are copied: these belong to the recording, and the
+        // game decrements a trade's uses in place while the screen is up.
+        merchant.setOffers(container.offers() == null ? new MerchantOffers() : container.offers().copy());
+        merchant.setMerchantLevel(container.villagerLevel());
+        merchant.setXp(container.villagerXp());
+        merchant.setShowProgressBar(container.showProgress());
+        merchant.setCanRestock(container.canRestock());
+    }
+
+    private static void applySlot(int slot, ItemStack item) {
         boolean wrote = menu != null && slot >= 0 && slot < menu.slots.size();
         if (wrote) {
             menu.getSlot(slot).set(item.copy());

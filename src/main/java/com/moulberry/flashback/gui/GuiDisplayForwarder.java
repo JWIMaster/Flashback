@@ -5,6 +5,7 @@ import com.moulberry.flashback.playback.ReplayPlayer;
 import com.moulberry.flashback.playback.ReplayServer;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.protocol.game.ClientboundMerchantOffersPacket;
 import net.minecraft.resources.Identifier;
 import net.minecraft.world.inventory.MenuType;
 import net.minecraft.world.item.ItemStack;
@@ -62,12 +63,6 @@ public final class GuiDisplayForwarder {
 
     /** One slot of the open container changed. */
     public static void slot(ReplayServer server, int containerId, int slot, ItemStack item) {
-        // DIAGNOSTIC (temporary): the armour is menu slots 5-8. This is where the recording's own
-        // account of them goes past, before the display has had any chance to misapply it.
-        if (slot >= 5 && slot <= 8) {
-            com.moulberry.flashback.Flashback.LOGGER.info("[armour-send] container={} slot={} item={}",
-                containerId, slot, item);
-        }
         if (!isOpen(containerId)) {
             return;
         }
@@ -80,6 +75,17 @@ public final class GuiDisplayForwarder {
             return;
         }
         send(server, FlashbackRemoteContainer.carried(openContainerId, carried.copy()));
+    }
+
+    /** A merchant's trades were sent, which the menu draws as rows rather than as slots. */
+    public static void offers(ReplayServer server, ClientboundMerchantOffersPacket packet) {
+        if (!isOpen(packet.getContainerId())) {
+            return;
+        }
+        // A copy, because the packet's offers belong to the replay's own menu and the payload is not
+        // encoded until it is sent.
+        send(server, FlashbackRemoteContainer.offers(packet.getContainerId(), packet.getOffers().copy(),
+            packet.getVillagerLevel(), packet.getVillagerXp(), packet.showProgress(), packet.canRestock()));
     }
 
     /** A container was closed. */

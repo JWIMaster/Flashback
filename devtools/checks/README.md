@@ -5,7 +5,10 @@ devtools/checks/run.sh
 ```
 
 Runs the suites that check the parts of the editor which can be reasoned about without a game
-running:
+running. The replay inventory suite also exercises an open → update → close → seek → restore
+state sequence using the production slot conversion. It is a headless model, not a substitute
+for recording and replaying in game.
+
 
 | Suite | Covers |
 | --- | --- |
@@ -16,6 +19,7 @@ running:
 | `OrbitTest` | what "the orbit camera" means: fixed point, or the subject it follows |
 | `ScrollBindingsTest` | the scroll gestures surviving the config, including a config that lost them |
 | `GuiLogTest` | reading container changes as "what moved where" |
+| `ReplayInventorySlotsTest` | hotbar/menu/armour conversion and headless replay transitions |
 | `ImGuiPairingCheck` | every ImGui begin has its end, and nothing returns out of one |
 
 `stubs/` holds the stand-in for the game client that some of them need.

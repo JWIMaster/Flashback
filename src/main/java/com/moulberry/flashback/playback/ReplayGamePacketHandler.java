@@ -2,6 +2,7 @@ package com.moulberry.flashback.playback;
 
 import com.moulberry.flashback.gui.GuiDisplayForwarder;
 import com.moulberry.flashback.gui.GuiPlayback;
+import com.moulberry.flashback.gui.InventoryMenuSlots;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.world.inventory.AbstractContainerMenu;
@@ -460,6 +461,13 @@ public class ReplayGamePacketHandler implements ClientGamePacketListener {
 
     @Override
     public void handleContainerContent(ClientboundContainerSetContentPacket packet) {
+        if (packet.containerId() == 0) {
+            // The detached container draws these menu slots, but the HUD reads the recorded
+            // player's inventory. Keep both views in step even when GUI display is disabled.
+            for (int i = 0; i < packet.items().size(); i++) {
+                mirrorOwnInventory(i, packet.items().get(i));
+            }
+        }
         GuiDisplayForwarder.content(this.replayServer, packet.containerId(), packet.items(), packet.carriedItem());
     }
 
@@ -496,15 +504,6 @@ public class ReplayGamePacketHandler implements ClientGamePacketListener {
         // as it always was.
         if (!GuiPlayback.shouldShow()) {
             return;
-        }
-
-        if (packet.getContainerId() == 0) {
-            // Container zero is the recorded player's own inventory, and its slot numbers are menu
-            // slots: the first five are the crafting grid, the next four are armour, then the
-            // twenty-seven of the main inventory, then the hotbar and the offhand. Writing the
-            // number straight into the inventory treats all of those as inventory indices, which
-            // puts a hotbar update in an armour slot. Going through the menu is what lines the two
-            // numberings up.
         }
 
         // Whether or not it was the player's own inventory, a container the recording has open has
@@ -1241,29 +1240,22 @@ public class ReplayGamePacketHandler implements ClientGamePacketListener {
         }
 
         net.minecraft.world.inventory.Slot menuSlot = inventoryMenu.getSlot(slot);
-        if (!menuSlot.mayPlace(itemStack)) {
-            // A slot that will not accept this item is the signature of a slot number being read in
-            // the wrong numbering. An armour slot only takes armour, so leaf litter arriving in the
-            // boots slot is not a change that ever happened - it is a hotbar change that has been
-            // resolved through the menu's numbering and landed in the armour instead. The same change
-            // arrives separately as the player's own inventory slot and is applied there.
-            return;
-        }
-
-        inventoryMenu.getSlot(slot).set(itemStack.copy());
+        // A server update may legitimately fill the crafting result or clear an armour slot;
+        // mayPlace is a rule for player clicks, not for authoritative slot updates.
+        menuSlot.set(itemStack.copy());
 
         if (menuSlot.container != player.getInventory()) {
-            // A crafting grid slot is not a slot of the player's inventory and has no inventory
-            // number to be given.
+            // The crafting result and grid are menu slots, not player inventory slots.
             return;
         }
-        int inventoryIndex = menuSlot.getContainerSlot();
+        int inventoryIndex = InventoryMenuSlots.inventoryIndex(slot);
 
+        if (inventoryIndex < 0 || inventoryIndex >= 9) {
+            return;
+        }
         for (ReplayPlayer replayViewer : this.replayServer.getReplayViewers()) {
             if (Objects.equals(replayViewer.lastFirstPersonDataUUID, player.getUUID())) {
-                if (inventoryIndex < replayViewer.lastFirstPersonHotbarItems.length) {
-                    replayViewer.lastFirstPersonHotbarItems[inventoryIndex] = itemStack.copy();
-                }
+                replayViewer.lastFirstPersonHotbarItems[inventoryIndex] = itemStack.copy();
                 ServerPlayNetworking.send(replayViewer,
                     new FlashbackRemoteSetSlot(player.getId(), inventoryIndex, itemStack.copy()));
             }
@@ -1276,9 +1268,16 @@ public class ReplayGamePacketHandler implements ClientGamePacketListener {
         if (entity instanceof Player player) {
             int slot = clientboundSetPlayerInventoryPacket.slot();
             ItemStack itemStack = clientboundSetPlayerInventoryPacket.contents();
-            player.getInventory().setItem(slot, itemStack);
+            int menuSlot = InventoryMenuSlots.menuSlot(slot);
+            if (menuSlot < 0) {
+                return;
+            }
+            player.getInventory().setItem(slot, itemStack.copy());
+            // This packet is inventory-indexed, unlike container-0 slot packets. Translate it
+            // before updating the detached menu so hotbar contents never land in craft/armour.
+            GuiDisplayForwarder.slot(this.replayServer, 0, menuSlot, itemStack);
 
-            if (slot < 0 || slot > 8) {
+            if (slot > 8) {
                 return;
             }
 
@@ -1629,8 +1628,10 @@ public class ReplayGamePacketHandler implements ClientGamePacketListener {
 
     @Override
     public void handleMerchantOffers(ClientboundMerchantOffersPacket packet) {
-        // The screen itself comes from the open packet; the offers are the trades a villager has,
-        // which are not the container's contents and are not drawn by the overlay.
+        // The screen itself comes from the open packet, but a villager's rows are the offers, not the
+        // container's slots - nothing else in the recording carries them, so they have to be passed on
+        // or the trading screen draws with no trades in it.
+        GuiDisplayForwarder.offers(this.replayServer, packet);
     }
 
     @Override

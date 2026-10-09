@@ -1117,15 +1117,10 @@ public class ReplayServer extends IntegratedServer {
                 replayViewer.forceRespectateTickCount -= 1;
             }
 
-            Entity camera = replayViewer.getCamera();
-            // Whose hotbar, health and held item the viewer is shown. The camera is the usual answer
-            // while spectating a player, and the recorded player is the answer otherwise: a replay
-            // has one player and everything the interface describes is theirs. Without this the data
-            // is only ever sent while the camera is already on a player, so on any other camera the
-            // hotbar keeps whatever it had - and every mirror of it elsewhere is gated on having been
-            // sent at least once, so none of them ever run either.
-            Player playerCamera = camera != replayViewer && camera instanceof Player cameraPlayer
-                ? cameraPlayer : this.recordedPlayer();
+            // The HUD always reads the recorded player (GuiDisplay.recordedPlayer), including when
+            // the camera is free or spectating somebody else. Send that same player's inventory and
+            // vitals, or the client will draw stale items while updates target another entity.
+            Player playerCamera = this.recordedPlayer();
             if (playerCamera != null) {
                 Inventory inventory = playerCamera.getInventory();
                 // Re-sent in full once a second as well as after a jump. The record of what the

@@ -582,7 +582,12 @@ public class Flashback implements ModInitializer, ClientModInitializer {
             if (player != null && camera != null && camera != player) {
                 if (camera.isRemoved()) {
                     Entity other = player.level().getEntity(camera.getId());
-                    if (other != null && !other.isRemoved()) {
+                    // A replay destroys and recreates its entities, so an id can belong to a
+                    // different entity by the time this runs. Adopting it would point the camera -
+                    // and with it the first-person hands - at the wrong player for a tick until the
+                    // replay's own UUID-based repair catches up. Only a same-UUID replacement is the
+                    // respawn this is for; anything else is left for that repair.
+                    if (other != null && !other.isRemoved() && other.getUUID().equals(camera.getUUID())) {
                         Minecraft.getInstance().setCameraEntity(other);
                     }
                 }

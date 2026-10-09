@@ -38,6 +38,7 @@ public class ContainerWireTest {
         anUnknownChangeIsTreatedAsAReset();
         aSlotUpdateIsFarSmallerThanTheWholeContainer();
         emptyContentsStillDecode();
+        aMerchantsTradesSurviveTheWire();
 
         if (failures > 0) {
             System.out.println("FAILURES: " + failures);
@@ -124,6 +125,39 @@ public class ContainerWireTest {
             roundTrip(FlashbackRemoteContainer.content(1, List.of(), ItemStack.EMPTY));
         check("an empty container is not mistaken for a missing one",
             received.kind() == FlashbackRemoteContainer.Kind.CONTENT && received.items().isEmpty());
+    }
+
+    /**
+     * A merchant's rows are not slots, so they travel in a change of their own. A change that lost
+     * its kind, or its container, would leave the trading screen drawing an empty list - the fault
+     * this is for - and a codec fault here is otherwise silent.
+     *
+     * <p>The list is left empty: this harness bootstraps the registries but never binds item
+     * components, so it cannot build a stack that a trade could cost or pay out. What is checked is
+     * the part this codec owns - that an offers change is written and read back as offers, keeping
+     * the container it belongs to and the villager's level, experience and flags, rather than
+     * falling through to some other change.
+     */
+    private static void aMerchantsTradesSurviveTheWire() {
+        net.minecraft.world.item.trading.MerchantOffers offers =
+            new net.minecraft.world.item.trading.MerchantOffers();
+
+        FlashbackRemoteContainer received = roundTrip(
+            FlashbackRemoteContainer.offers(7, offers, 2, 40, true, false));
+
+        check("the change is still an offers change", received.kind() == FlashbackRemoteContainer.Kind.OFFERS);
+        check("the trades belong to the container they came from", received.containerId() == 7);
+        check("the trade list survives", received.offers() != null && received.offers().isEmpty());
+        check("the villager's level survives", received.villagerLevel() == 2);
+        check("the villager's experience survives", received.villagerXp() == 40);
+        check("the progress bar flag survives", received.showProgress());
+        check("the restock flag survives", !received.canRestock());
+        check("an offers change is not mistaken for contents", received.items().isEmpty());
+
+        // Appending the kind after RESET is what keeps a recording written before it readable: the
+        // ordinal is what goes on the wire, so anything inserted earlier shifts every later kind.
+        check("the offers kind was appended, not inserted",
+            FlashbackRemoteContainer.Kind.OFFERS.ordinal() == FlashbackRemoteContainer.Kind.RESET.ordinal() + 1);
     }
 
     private static FlashbackRemoteContainer roundTrip(FlashbackRemoteContainer payload) {

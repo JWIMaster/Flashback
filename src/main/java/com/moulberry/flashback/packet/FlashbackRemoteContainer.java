@@ -7,6 +7,7 @@ import net.minecraft.network.chat.ComponentSerialization;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.trading.MerchantOffers;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -32,9 +33,16 @@ import java.util.List;
  * @param items       the whole contents, on {@link Kind#CONTENT} only
  * @param carried     the stack on the cursor, on {@link Kind#OPEN}, {@link Kind#CONTENT} and
  *                    {@link Kind#CARRIED}
+ * @param offers      a merchant's trades, on {@link Kind#OFFERS} only
+ * @param villagerLevel the merchant's level, on {@link Kind#OFFERS} only
+ * @param villagerXp  the merchant's experience, on {@link Kind#OFFERS} only
+ * @param showProgress whether the merchant's progress bar is drawn, on {@link Kind#OFFERS} only
+ * @param canRestock  whether the merchant can restock, on {@link Kind#OFFERS} only
  */
 public record FlashbackRemoteContainer(int containerId, Kind kind, String menuType, Component title,
-                                       int slot, ItemStack item, List<ItemStack> items, ItemStack carried)
+                                       int slot, ItemStack item, List<ItemStack> items, ItemStack carried,
+                                       MerchantOffers offers, int villagerLevel, int villagerXp,
+                                       boolean showProgress, boolean canRestock)
         implements CustomPacketPayload {
 
     /**
@@ -102,7 +110,18 @@ public record FlashbackRemoteContainer(int containerId, Kind kind, String menuTy
          * <p>Seeking forwards skips the packets that would have closed a container, so the recording
          * has to say "forget it" rather than rely on a close that will never be played.
          */
-        RESET
+        RESET,
+        /**
+         * A merchant's trades.
+         *
+         * <p>The trades are not the container's contents: a villager's menu has one slot per trade
+         * side, and the rows the screen draws come from the menu's offers rather than from any slot.
+         * So the contents packets never carry them and this has to.
+         *
+         * <p>Appended after {@link #RESET} on purpose: the ordinal is what goes on the wire, so
+         * inserting anywhere earlier would silently reinterpret every recording already written.
+         */
+        OFFERS
     }
 
     public static final Type<FlashbackRemoteContainer> TYPE =
@@ -118,32 +137,38 @@ public record FlashbackRemoteContainer(int containerId, Kind kind, String menuTy
 
     public static FlashbackRemoteContainer open(int containerId, String menuType, Component title) {
         return new FlashbackRemoteContainer(containerId, Kind.OPEN, menuType, title, 0, ItemStack.EMPTY,
-            List.of(), ItemStack.EMPTY);
+            List.of(), ItemStack.EMPTY, null, 0, 0, false, false);
     }
 
     public static FlashbackRemoteContainer content(int containerId, List<ItemStack> items, ItemStack carried) {
         return new FlashbackRemoteContainer(containerId, Kind.CONTENT, "", Component.empty(), 0, ItemStack.EMPTY,
-            items, carried);
+            items, carried, null, 0, 0, false, false);
     }
 
     public static FlashbackRemoteContainer slot(int containerId, int slot, ItemStack item) {
         return new FlashbackRemoteContainer(containerId, Kind.SLOT, "", Component.empty(), slot, item,
-            List.of(), ItemStack.EMPTY);
+            List.of(), ItemStack.EMPTY, null, 0, 0, false, false);
     }
 
     public static FlashbackRemoteContainer carried(int containerId, ItemStack carried) {
         return new FlashbackRemoteContainer(containerId, Kind.CARRIED, "", Component.empty(), 0, ItemStack.EMPTY,
-            List.of(), carried);
+            List.of(), carried, null, 0, 0, false, false);
     }
 
     public static FlashbackRemoteContainer close(int containerId) {
         return new FlashbackRemoteContainer(containerId, Kind.CLOSE, "", Component.empty(), 0, ItemStack.EMPTY,
-            List.of(), ItemStack.EMPTY);
+            List.of(), ItemStack.EMPTY, null, 0, 0, false, false);
     }
 
     public static FlashbackRemoteContainer reset() {
         return new FlashbackRemoteContainer(-1, Kind.RESET, "", Component.empty(), 0, ItemStack.EMPTY,
-            List.of(), ItemStack.EMPTY);
+            List.of(), ItemStack.EMPTY, null, 0, 0, false, false);
+    }
+
+    public static FlashbackRemoteContainer offers(int containerId, MerchantOffers offers, int villagerLevel,
+                                                  int villagerXp, boolean showProgress, boolean canRestock) {
+        return new FlashbackRemoteContainer(containerId, Kind.OFFERS, "", Component.empty(), 0, ItemStack.EMPTY,
+            List.of(), ItemStack.EMPTY, offers, villagerLevel, villagerXp, showProgress, canRestock);
     }
 
     private static final Kind[] KINDS = Kind.values();
@@ -162,6 +187,11 @@ public record FlashbackRemoteContainer(int containerId, Kind kind, String menuTy
             ItemStack item = ItemStack.EMPTY;
             List<ItemStack> items = List.of();
             ItemStack carried = ItemStack.EMPTY;
+            MerchantOffers offers = null;
+            int villagerLevel = 0;
+            int villagerXp = 0;
+            boolean showProgress = false;
+            boolean canRestock = false;
 
             switch (kind) {
                 case OPEN -> {
@@ -177,11 +207,19 @@ public record FlashbackRemoteContainer(int containerId, Kind kind, String menuTy
                     item = ItemStack.OPTIONAL_STREAM_CODEC.decode(buffer);
                 }
                 case CARRIED -> carried = ItemStack.OPTIONAL_STREAM_CODEC.decode(buffer);
+                case OFFERS -> {
+                    offers = MerchantOffers.STREAM_CODEC.decode(buffer);
+                    villagerLevel = buffer.readVarInt();
+                    villagerXp = buffer.readVarInt();
+                    showProgress = buffer.readBoolean();
+                    canRestock = buffer.readBoolean();
+                }
                 default -> {
                 }
             }
 
-            return new FlashbackRemoteContainer(containerId, kind, menuType, title, slot, item, items, carried);
+            return new FlashbackRemoteContainer(containerId, kind, menuType, title, slot, item, items, carried,
+                offers, villagerLevel, villagerXp, showProgress, canRestock);
         }
 
         @Override
@@ -203,6 +241,14 @@ public record FlashbackRemoteContainer(int containerId, Kind kind, String menuTy
                     ItemStack.OPTIONAL_STREAM_CODEC.encode(buffer, container.item());
                 }
                 case CARRIED -> ItemStack.OPTIONAL_STREAM_CODEC.encode(buffer, container.carried());
+                case OFFERS -> {
+                    MerchantOffers.STREAM_CODEC.encode(buffer,
+                        container.offers() == null ? new MerchantOffers() : container.offers());
+                    buffer.writeVarInt(container.villagerLevel());
+                    buffer.writeVarInt(container.villagerXp());
+                    buffer.writeBoolean(container.showProgress());
+                    buffer.writeBoolean(container.canRestock());
+                }
                 default -> {
                 }
             }

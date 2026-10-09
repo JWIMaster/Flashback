@@ -73,6 +73,10 @@ run_check "ImGuiPairingCheck" com.moulberry.flashback.ImGuiPairingCheck \
     src/main/java/com/moulberry/flashback/editor/ui/windows/TimelineWindow.java
 run_check "ContainerGuiCheck" com.moulberry.flashback.gui.ContainerGuiCheck src/main/java
 
+if ! bash devtools/checks/run-replay-inventory.sh; then
+    failures=$((failures + 1))
+fi
+
 if [ "$failures" -ne 0 ]; then
     echo "$failures suite(s) failed"
     exit 1

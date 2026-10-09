@@ -41,6 +41,8 @@ public class ContainerGuiCheck {
         theInterfaceFollowsTheShotAsWellAsTheCamera(root);
         aSeekRestoresWhatTheClientCannotRebuild(root);
         theRecordingWritesTheClosesTheServerDoesNot(root);
+        aMerchantsTradesReachTheScreen(root);
+        theCameraIsRepairedByPlayerNotById(root);
 
         if (failures > 0) {
             System.out.println("FAILURES: " + failures);
@@ -193,8 +195,9 @@ public class ContainerGuiCheck {
         check("the mirror is told what the server said",
             recording.contains("ClientboundContainerSetSlotPacket")
                 && recording.contains("ClientboundContainerSetContentPacket"));
-        check("the recording can name an open container without its opening packet",
-            recording.contains("ClientboundOpenScreenPacket") && recording.contains("restate"));
+        check("the recording can name an open container in its snapshot",
+            recording.contains("ClientboundOpenScreenPacket") && recording.contains("snapshotState()")
+                && recording.contains("FlashbackRemoteContainer.open"));
 
         String containerScreen = Files.readString(
             root.resolve("com/moulberry/flashback/mixin/gui/MixinAbstractContainerScreen.java"));
@@ -204,8 +207,12 @@ public class ContainerGuiCheck {
         String recorder = Files.readString(root.resolve("com/moulberry/flashback/record/Recorder.java"));
         check("the recorder feeds the mirror every packet",
             recorder.contains("GuiRecording.observePacket"));
-        check("a snapshot says what was open",
-            recorder.contains("GuiRecording.onSnapshot"));
+        check("a snapshot carries the open screen before it is written",
+            recorder.contains("GuiRecording.snapshotState()")
+                && recorder.indexOf("GuiRecording.snapshotState()") < recorder.lastIndexOf("writeGamePackets(this.gamePacketCodec, gamePackets)"));
+        check("synthetic hotbar updates and snapshots use menu slots, not inventory indices",
+            recorder.contains("ClientboundContainerSetSlotPacket(0, 0, InventoryMenuSlots.hotbarMenuSlot(i), copied)")
+                && recorder.contains("ClientboundContainerSetSlotPacket(0, 0, InventoryMenuSlots.hotbarMenuSlot(i), hotbarItem.copy())"));
     }
 
     /**
@@ -221,7 +228,10 @@ public class ContainerGuiCheck {
         String body = methodBody(handler, "mirrorOwnInventory");
         check("the inventory mirror was found", body != null);
         if (body != null) {
-            check("it asks the slot for its own container's index", body.contains("getContainerSlot()"));
+            check("it converts the player's menu slot to an inventory index",
+                body.contains("InventoryMenuSlots.inventoryIndex(slot)"));
+            check("an authoritative result or armour update is not rejected as an invalid click",
+                !body.contains("mayPlace("));
             check("the recorded player's inventory is not addressed with a menu index",
                 !body.contains("FlashbackRemoteSetSlot(player.getId(), slot,"));
         }
@@ -229,6 +239,10 @@ public class ContainerGuiCheck {
         // The first-person hotbar is not part of the container interface, so hiding the interface must
         // not stop the recorded player's inventory being kept current - and must not leave this side
         // believing the client has something it was never sent.
+        String contentHandler = methodBody(handler, "handleContainerContent");
+        check("container-zero content also restores the HUD inventory",
+            contentHandler != null && contentHandler.contains("packet.containerId() == 0")
+                && contentHandler.contains("mirrorOwnInventory(i,"));
         String slotHandler = methodBody(handler, "handleContainerSetSlot");
         check("the container slot handler was found", slotHandler != null);
         if (slotHandler != null) {
@@ -275,6 +289,62 @@ public class ContainerGuiCheck {
 
         String player = Files.readString(root.resolve("com/moulberry/flashback/playback/ReplayPlayer.java"));
         check("the resend window is state on the viewer", player.contains("resendFirstPersonTicks"));
+    }
+
+    /**
+     * A villager's rows are offers rather than slots, and nothing else carries them: the empty
+     * handler this replaces was exactly the bug. Each hop is checked, because a payload that is
+     * recorded, forwarded and then dropped on the client looks identical to one never sent.
+     */
+    private static void aMerchantsTradesReachTheScreen(Path root) throws Exception {        String handler = Files.readString(
+            root.resolve("com/moulberry/flashback/playback/ReplayGamePacketHandler.java"));
+        String offersHandler = methodBody(handler, "handleMerchantOffers");
+        check("the merchant offers handler was found", offersHandler != null);
+        if (offersHandler != null) {
+            check("recorded trades are forwarded rather than dropped",
+                offersHandler.contains("GuiDisplayForwarder.offers"));
+        }
+
+        String forwarder = Files.readString(
+            root.resolve("com/moulberry/flashback/gui/GuiDisplayForwarder.java"));
+        check("the forwarder sends trades only for the container that is open",
+            forwarder.contains("FlashbackRemoteContainer.offers(") && forwarder.contains("isOpen("));
+
+        String display = Files.readString(root.resolve("com/moulberry/flashback/gui/GuiDisplay.java"));
+        String applyOffers = methodBody(display, "applyOffers");
+        check("the display applies trades", applyOffers != null);
+        if (applyOffers != null) {
+            check("trades are put into the merchant menu the screen draws from",
+                applyOffers.contains("instanceof MerchantMenu") && applyOffers.contains("setOffers("));
+            check("a container that is not a merchant is left alone",
+                applyOffers.contains("return;"));
+        }
+        check("the display handles the offers change",
+            display.contains("case OFFERS"));
+
+        String recording = Files.readString(root.resolve("com/moulberry/flashback/gui/GuiRecording.java"));
+        check("a seek snapshot carries an open trade's rows",
+            recording.contains("menu instanceof MerchantMenu")
+                && recording.contains("FlashbackRemoteContainer.offers("));
+    }
+
+    /**
+     * The camera entity is what the first-person hands are drawn from, so pointing it at the wrong
+     * entity shows the wrong player's hands - including their item-use pose - for a tick. A replay
+     * reuses entity ids as it replaces entities, so a removed camera may only be repaired to an
+     * entity that is the same player; the replay's own UUID-based repair does the rest.
+     */
+    private static void theCameraIsRepairedByPlayerNotById(Path root) throws Exception {
+        String source = Files.readString(root.resolve("com/moulberry/flashback/Flashback.java"));
+        int at = source.indexOf("setCameraEntity(other)");
+        check("the respawn camera repair was found", at >= 0);
+        if (at < 0) {
+            return;
+        }
+        int from = Math.max(0, at - 600);
+        String around = source.substring(from, at);
+        check("a replacement camera entity must be the same player",
+            around.contains("other.getUUID().equals(camera.getUUID())"));
     }
 
     private static Method handlerFor(Class<?> packetType) {
