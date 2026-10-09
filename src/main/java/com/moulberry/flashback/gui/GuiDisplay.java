@@ -20,6 +20,7 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
 import net.minecraft.world.SimpleContainer;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.entity.EntityEquipment;
 import net.minecraft.world.entity.animal.equine.AbstractHorse;
 import net.minecraft.world.entity.animal.nautilus.AbstractNautilus;
@@ -340,6 +341,23 @@ public final class GuiDisplay {
      * replaced: those are for deciding whether to read a player's inventory, and here they would
      * blink the window off for a frame whenever an entity was swapped.
      */
+    /**
+     * The player the replay is of, as this client currently has them.
+     *
+     * <p>The interface is about them, so the readouts beside it are too - the hotbar, the health and
+     * the held item. The camera player is the answer while spectating and the wrong answer the rest
+     * of the time, because then it is the viewer, who owns nothing in a replay.
+     */
+    @Nullable
+    public static Player recordedPlayer() {
+        Minecraft minecraft = Minecraft.getInstance();
+        ReplayServer replayServer = Flashback.getReplayServer();
+        if (minecraft == null || minecraft.level == null || replayServer == null) {
+            return null;
+        }
+        return minecraft.level.getEntity(replayServer.getLocalPlayerId()) instanceof Player player ? player : null;
+    }
+
     private static boolean showingThroughAPlayer(Minecraft minecraft) {
         if (shotIsSpectate()) {
             return true;

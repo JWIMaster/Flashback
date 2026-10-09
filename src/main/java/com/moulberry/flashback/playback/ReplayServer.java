@@ -643,6 +643,18 @@ public class ReplayServer extends IntegratedServer {
         return this.gamePacketHandler.localPlayerId;
     }
 
+    /** The player the replay is of, wherever they currently are, or null before they exist. */
+    @Nullable
+    public Player recordedPlayer() {
+        int id = this.getLocalPlayerId();
+        for (ServerLevel level : this.getAllLevels()) {
+            if (level.getEntity(id) instanceof Player player) {
+                return player;
+            }
+        }
+        return null;
+    }
+
     public void setTimeRtc(long rtc) {
         this.pendingTimeRtc = rtc;
     }
@@ -1098,7 +1110,15 @@ public class ReplayServer extends IntegratedServer {
             }
 
             Entity camera = replayViewer.getCamera();
-            if (camera != replayViewer && camera instanceof Player playerCamera) {
+            // Whose hotbar, health and held item the viewer is shown. The camera is the usual answer
+            // while spectating a player, and the recorded player is the answer otherwise: a replay
+            // has one player and everything the interface describes is theirs. Without this the data
+            // is only ever sent while the camera is already on a player, so on any other camera the
+            // hotbar keeps whatever it had - and every mirror of it elsewhere is gated on having been
+            // sent at least once, so none of them ever run either.
+            Player playerCamera = camera != replayViewer && camera instanceof Player cameraPlayer
+                ? cameraPlayer : this.recordedPlayer();
+            if (playerCamera != null) {
                 Inventory inventory = playerCamera.getInventory();
                 boolean resend = replayViewer.resendFirstPersonTicks > 0;
                 if (resend) {

@@ -40,6 +40,23 @@ public abstract class MixinHud {
     @Unique
     private boolean shouldHideElements = false;
 
+    /**
+     * Draws the readouts for the player the replay is of, rather than for whoever the camera is on.
+     *
+     * <p>While spectating they are the same player. On any other camera the camera player is the
+     * viewer, who has no hotbar, no health and no held item in a replay - so a free camera showed an
+     * empty bar beside an interface that was correctly describing the recorded player.
+     */
+    @Inject(method = "getCameraPlayer", at = @At("HEAD"), cancellable = true, require = 0)
+    private void flashback$useRecordedPlayer(CallbackInfoReturnable<Player> cir) {
+        if (Flashback.isInReplay()) {
+            Player recorded = GuiDisplay.recordedPlayer();
+            if (recorded != null) {
+                cir.setReturnValue(recorded);
+            }
+        }
+    }
+
     @Inject(method = "extractRenderState", at = @At("HEAD"))
     public void extractRenderState_updateCameraGameType(GuiGraphicsExtractor guiGraphics, DeltaTracker deltaTracker, CallbackInfo ci) {
         this.shouldHideElements = false;
