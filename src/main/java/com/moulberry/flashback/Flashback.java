@@ -20,6 +20,7 @@ import com.moulberry.flashback.editor.ui.ReplayUI;
 import com.moulberry.flashback.exporting.ExportJob;
 import com.moulberry.flashback.exporting.taskbar.TaskbarManager;
 import com.moulberry.flashback.ext.MinecraftExt;
+import com.moulberry.flashback.gui.GuiRecording;
 import com.moulberry.flashback.keyframe.KeyframeRegistry;
 import com.moulberry.flashback.keyframe.types.*;
 import com.moulberry.flashback.packet.FlashbackAccurateEntityPosition;
@@ -32,6 +33,7 @@ import com.moulberry.flashback.packet.FlashbackRawCustomPayload;
 import com.moulberry.flashback.packet.FlashbackRemoteExperience;
 import com.moulberry.flashback.packet.FlashbackRemoteFoodData;
 import com.moulberry.flashback.packet.FlashbackRemoteSelectHotbarSlot;
+import com.moulberry.flashback.packet.FlashbackRemoteContainer;
 import com.moulberry.flashback.packet.FlashbackRemoteSetSlot;
 import com.moulberry.flashback.packet.FlashbackSetBorderLerpStartTime;
 import com.moulberry.flashback.packet.FlashbackVoiceChatSound;
@@ -216,6 +218,7 @@ public class Flashback implements ModInitializer, ClientModInitializer {
         PayloadTypeRegistry.clientboundPlay().register(FlashbackRemoteExperience.TYPE, FlashbackRemoteExperience.STREAM_CODEC);
         PayloadTypeRegistry.clientboundPlay().register(FlashbackRemoteFoodData.TYPE, FlashbackRemoteFoodData.STREAM_CODEC);
         PayloadTypeRegistry.clientboundPlay().register(FlashbackRemoteSetSlot.TYPE, FlashbackRemoteSetSlot.STREAM_CODEC);
+        PayloadTypeRegistry.clientboundPlay().register(FlashbackRemoteContainer.TYPE, FlashbackRemoteContainer.STREAM_CODEC);
         PayloadTypeRegistry.clientboundPlay().register(FlashbackVoiceChatSound.TYPE, FlashbackVoiceChatSound.STREAM_CODEC);
         PayloadTypeRegistry.clientboundPlay().register(FlashbackAccurateEntityPosition.TYPE, FlashbackAccurateEntityPosition.STREAM_CODEC);
         PayloadTypeRegistry.clientboundPlay().register(FlashbackSetBorderLerpStartTime.TYPE, FlashbackSetBorderLerpStartTime.STREAM_CODEC);
@@ -362,6 +365,14 @@ public class Flashback implements ModInitializer, ClientModInitializer {
                     player.getFoodData().setFoodLevel(payload.foodLevel());
                     player.getFoodData().setSaturation(payload.saturationLevel());
                 }
+            }
+        });
+
+        ClientPlayNetworking.registerGlobalReceiver(FlashbackRemoteContainer.TYPE, (payload, context) -> {
+            if (Flashback.isInReplay()) {
+                // The client is the only place a screen may be built, so this is where a recorded
+                // container becomes something to look at.
+                com.moulberry.flashback.gui.GuiDisplay.handle(payload);
             }
         });
 
@@ -1048,6 +1059,9 @@ public class Flashback implements ModInitializer, ClientModInitializer {
         }
 
         RECORDER = new Recorder(Minecraft.getInstance().player.registryAccess());
+        // A recording starts with nothing open, whatever the player was looking at when the last one
+        // ended. Without this, the first screen to close could be recorded as one that opened.
+        GuiRecording.reset();
         if (Flashback.getConfig().recordingControls.showRecordingToasts) {
             SystemToast.add(Minecraft.getInstance().gui.toastManager(), FlashbackSystemToasts.RECORDING_TOAST,
                     FlashbackTextComponents.FLASHBACK, Component.translatable("flashback.toast.started_recording"));

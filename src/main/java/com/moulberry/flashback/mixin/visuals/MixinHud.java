@@ -4,6 +4,7 @@ import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
 import com.moulberry.flashback.Flashback;
 import com.moulberry.flashback.editor.ui.MouseHandledBy;
+import com.moulberry.flashback.gui.GuiDisplay;
 import com.moulberry.flashback.state.EditorState;
 import com.moulberry.flashback.state.EditorStateManager;
 import com.moulberry.flashback.editor.ui.ReplayUI;
@@ -58,6 +59,14 @@ public abstract class MixinHud {
                 }
             }
         }
+    }
+
+    @Inject(method = "extractRenderState", at = @At("TAIL"), require = 0)
+    public void extractRenderState_recordedContainer(GuiGraphicsExtractor guiGraphics, DeltaTracker deltaTracker, CallbackInfo ci) {
+        // The container the recorded player had open, drawn over the rest of the interface. It is
+        // drawn rather than shown as a screen so that it cannot take the mouse: a replay's container
+        // is a picture of one, and the mouse belongs to the viewer and to the editor.
+        GuiDisplay.extract(guiGraphics);
     }
 
     @Inject(method = "extractChat", at = @At("HEAD"), cancellable = true, require = 0)

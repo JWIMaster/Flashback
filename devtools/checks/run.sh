@@ -39,19 +39,39 @@ CP="build/classes/java/main:deps/imgui-binding-1.90.0.jar:$GSON:$SLF4J:$MC"
 
 RUN="$OUT/stubs:$OUT/classes:build/classes/java/main:deps/imgui-binding-1.90.0.jar:$GSON:$SLF4J:$MC:$LIBS"
 failures=0
+
+# A suite reports itself with an exit status and ends with a one-line summary. Piping into tail to
+# get that line would report tail's status instead of the suite's, so a failing suite would read as
+# a pass, which is the one thing a check runner must never do.
+run_check() {
+    local name="$1"
+    shift
+    printf '%-46s ' "$name"
+    local output
+    if output=$("$JAVA_HOME/bin/java" -cp "$RUN" "$@" 2>&1); then
+        printf '%s\n' "$output" | tail -1
+    else
+        failures=$((failures + 1))
+        printf '%s\n' "$output" | grep -E '^(FAIL|FAILURES|Exception|.*Error)' | head -5
+        printf '%s\n' "$output" | tail -1
+    fi
+}
+
 for suite in \
     com.moulberry.flashback.state.MigrationTest \
     com.moulberry.flashback.state.EvaluationTest \
     com.moulberry.flashback.state.LoadCompatTest \
     com.moulberry.flashback.editor.ui.timeline.LayoutTest \
     com.moulberry.flashback.keyframe.OrbitTest \
-    com.moulberry.flashback.keybind.ScrollBindingsTest; do
-    printf '%-46s ' "$(basename "$suite")"
-    if "$JAVA_HOME/bin/java" -cp "$RUN" "$suite" 2>&1 | tail -1; then :; else failures=$((failures + 1)); fi
+    com.moulberry.flashback.keybind.ScrollBindingsTest \
+    com.moulberry.flashback.gui.GuiLogTest \
+    com.moulberry.flashback.gui.ContainerWireTest; do
+    run_check "$(basename "$suite")" "$suite"
 done
-printf '%-46s ' "ImGuiPairingCheck"
-"$JAVA_HOME/bin/java" -cp "$RUN" com.moulberry.flashback.ImGuiPairingCheck \
-    src/main/java/com/moulberry/flashback/editor/ui/windows/TimelineWindow.java | tail -1
+
+run_check "ImGuiPairingCheck" com.moulberry.flashback.ImGuiPairingCheck \
+    src/main/java/com/moulberry/flashback/editor/ui/windows/TimelineWindow.java
+run_check "ContainerGuiCheck" com.moulberry.flashback.gui.ContainerGuiCheck src/main/java
 
 if [ "$failures" -ne 0 ]; then
     echo "$failures suite(s) failed"

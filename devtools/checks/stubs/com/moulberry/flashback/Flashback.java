@@ -36,4 +36,9 @@ public class Flashback {
     public static FlashbackConfigV1 getConfig() {
         return config;
     }
+
+    /** The payload classes build their identifiers at class-initialisation time. */
+    public static net.minecraft.resources.Identifier createIdentifier(String path) {
+        return net.minecraft.resources.Identifier.fromNamespaceAndPath("flashback", path);
+    }
 }

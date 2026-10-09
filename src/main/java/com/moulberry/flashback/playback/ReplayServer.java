@@ -11,6 +11,7 @@ import com.moulberry.flashback.ext.ConnectionExt;
 import com.moulberry.flashback.ext.LevelChunkExt;
 import com.moulberry.flashback.TempFolderProvider;
 import com.moulberry.flashback.ext.ServerTickRateManagerExt;
+import com.moulberry.flashback.gui.GuiDisplayForwarder;
 import com.moulberry.flashback.keyframe.Keyframe;
 import com.moulberry.flashback.keyframe.handler.ReplayServerKeyframeHandler;
 import com.moulberry.flashback.keyframe.impl.BlockOverrideKeyframe;
@@ -21,6 +22,7 @@ import com.moulberry.flashback.packet.FlashbackClearParticles;
 import com.moulberry.flashback.packet.FlashbackForceClientTick;
 import com.moulberry.flashback.packet.FlashbackInstantlyLerp;
 import com.moulberry.flashback.packet.FlashbackRawCustomPayload;
+import com.moulberry.flashback.packet.FlashbackRemoteContainer;
 import com.moulberry.flashback.packet.FlashbackRemoteExperience;
 import com.moulberry.flashback.packet.FlashbackRemoteFoodData;
 import com.moulberry.flashback.packet.FlashbackRemoteSelectHotbarSlot;
@@ -138,6 +140,8 @@ public class ReplayServer extends IntegratedServer {
     private boolean desiredFrozen = false;
     private int desiredFrozenDelay = -1;
     private boolean isFrozen = false;
+    /** Whether the "the recording has run out" container reset has already been sent. */
+    private boolean endOfReplayResetSent = false;
     private int frozenDelay = -1;
 
     public volatile boolean failedToLoadRegistryDataWarning = false;
@@ -735,6 +739,13 @@ public class ReplayServer extends IntegratedServer {
                     return;
                 }
 
+                // A container change the recording wrote itself: the openings the server never
+                // hears about, and every closing. It reaches the client the way any other recorded
+                // payload does, but the replay's own idea of what is open has to follow it too.
+                if (custom.payload() instanceof FlashbackRemoteContainer container) {
+                    GuiDisplayForwarder.observe(container);
+                }
+
                 friendlyByteBuf.readerIndex(start);
                 friendlyByteBuf.readVarInt(); // skip packet id
                 int dataSize = end - friendlyByteBuf.readerIndex();
@@ -948,6 +959,9 @@ public class ReplayServer extends IntegratedServer {
         if (!this.initializedWithSnapshot) {
             this.initializedWithSnapshot = true;
 
+            // A new replay starts with nothing open, whatever the last one left behind.
+            GuiDisplayForwarder.reset(this);
+
             // Play initial snapshot
             ReplayReader replayReader = this.playableChunksByStart.get(0).getOrLoadReplayReader(this.registryAccess());
             replayReader.handleSnapshot(this);
@@ -999,6 +1013,12 @@ public class ReplayServer extends IntegratedServer {
         if (this.jumpToTick >= 0) {
             this.targetTick = this.jumpToTick;
             this.jumpToTick = -1;
+            // A jump forwards skips over packets without playing them, so whatever container the
+            // recording had open may never be closed by one. Take it down here, in the recording's
+            // own order, rather than leaving the viewer looking at a container from a tick that is
+            // no longer playing.
+            GuiDisplayForwarder.reset(this);
+            this.endOfReplayResetSent = false;
         } else if (!this.replayPaused && this.targetTick < this.totalTicks) {
             // Normal playback
             this.targetTick += 1;
@@ -1006,6 +1026,12 @@ public class ReplayServer extends IntegratedServer {
         } else if (this.targetTick == this.totalTicks && this.currentTick == this.totalTicks) {
             // Pause when reaching end of replay
             this.replayPaused = true;
+            if (!this.endOfReplayResetSent) {
+                // A recording that ended while a container was open has no close in it, and the last
+                // thing on screen would otherwise stay there for as long as the replay is.
+                this.endOfReplayResetSent = true;
+                GuiDisplayForwarder.reset(this);
+            }
         }
 
         ServerTickRateManager tickRateManager = this.tickRateManager();

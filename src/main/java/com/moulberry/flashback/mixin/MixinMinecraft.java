@@ -17,6 +17,7 @@ import com.moulberry.flashback.combo_options.GlowingOverride;
 import com.moulberry.flashback.configuration.FlashbackConfigV1;
 import com.moulberry.flashback.exporting.ExportJob;
 import com.moulberry.flashback.exporting.ExportJobQueue;
+import com.moulberry.flashback.gui.GuiDisplay;
 import com.moulberry.flashback.ext.WindowExt;
 import com.moulberry.flashback.keyframe.handler.MinecraftKeyframeHandler;
 import com.moulberry.flashback.keyframe.handler.TickrateKeyframeCapture;
@@ -299,6 +300,9 @@ public abstract class MixinMinecraft extends ReentrantBlockableEventLoop<Runnabl
     @Inject(method = "disconnect(Lnet/minecraft/client/gui/screens/Screen;ZZ)V", at = @At("RETURN"))
     public void disconnectReturn(Screen screen, boolean bl, boolean bl2, CallbackInfo ci) {
         Flashback.updateIsInReplay();
+        // A replay's container is a picture of one from a recording that is no longer playing, and
+        // nothing will arrive to take it down once the connection is gone.
+        GuiDisplay.clear();
     }
 
     @Unique
