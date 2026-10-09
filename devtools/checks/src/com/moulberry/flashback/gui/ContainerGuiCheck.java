@@ -49,6 +49,7 @@ public class ContainerGuiCheck {
         stopSpectatingHasAKey(root);
         theCameraInspectorKeepsItsLocksToItself();
         aDragFieldNeverUsesFloatMinValueAsItsLowerBound();
+        theCameraInspectorOpensBesideTheVisualsPanel();
         if (failures > 0) {
             System.out.println("FAILURES: " + failures);
             System.exit(1);
@@ -588,6 +589,33 @@ public class ContainerGuiCheck {
         check("the camera inspector resolves the fov sentinel before dragging it",
             inspector.contains("fov[0] < 0 && drag == null")
                 && inspector.contains("defaultOverrideFov"));
+    }
+
+    /**
+     * The camera inspector must open as a tab beside the visuals panel, not as another floating window.
+     *
+     * <p>Two single-token mistakes undo that, and neither fails loudly: dropping the dock target leaves
+     * the panel floating wherever it was last dragged, and appearing without focus leaves it hidden
+     * behind the very tab it docked beside - a docked window that does not take focus is not the
+     * selected tab, so the panel would never actually show. Asserted against the source for the same
+     * reason as the lock rule: one call is the whole behaviour.
+     */
+    private static void theCameraInspectorOpensBesideTheVisualsPanel() throws Exception {
+        String inspector = Files.readString(
+            Path.of("src/main/java/com/moulberry/flashback/editor/ui/windows/CameraInspectorWindow.java"));
+        check("the camera inspector opens into the visuals panel's dock node",
+            inspector.contains("int visualsDock = VisualsWindow.dockNodeId();")
+                && inspector.contains("setNextWindowDockID(visualsDock, ImGuiCond.Appearing)"));
+        check("the camera inspector only docks when the visuals panel has a node to join",
+            inspector.contains("if (visualsDock != 0)"));
+        check("the camera inspector's window carries no flags that would leave it behind the tab",
+            inspector.contains("ImGui.begin(title, windowOpen)")
+                && !inspector.contains("ImGuiWindowFlags"));
+
+        String visuals = Files.readString(
+            Path.of("src/main/java/com/moulberry/flashback/editor/ui/windows/VisualsWindow.java"));
+        check("the visuals panel reports the dock node it is actually in",
+            visuals.contains("dockNodeId = ImGui.getWindowDockID()"));
     }
 
     private static int countOccurrences(String source, String needle) {

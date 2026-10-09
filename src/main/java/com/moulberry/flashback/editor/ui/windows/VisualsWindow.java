@@ -28,6 +28,20 @@ public class VisualsWindow {
     private static final float[] floatBuffer = new float[]{0};
     private static final int[] intBuffer = new int[]{0};
 
+    /**
+     * The dock node the visuals panel is currently in, or 0 while it is floating.
+     *
+     * <p>Read from the window itself rather than taken from the default layout, because the user can
+     * rearrange the docks: a node id remembered from the layout file would then point at whatever
+     * occupies that slot now. The camera inspector asks for this so it can open as a tab beside the
+     * visuals panel rather than as another window to arrange.
+     */
+    private static int dockNodeId = 0;
+
+    public static int dockNodeId() {
+        return dockNodeId;
+    }
+
     public static void render() {
         ReplayServer replayServer = Flashback.getReplayServer();
         if (replayServer == null) {
@@ -345,6 +359,8 @@ public class VisualsWindow {
                 }
             }
         }
+        // While the window is current, so this is ImGui's own answer for where the panel is.
+        dockNodeId = ImGui.getWindowDockID();
         ImGui.end();
     }
 

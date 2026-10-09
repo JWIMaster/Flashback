@@ -30,7 +30,6 @@ import com.moulberry.flashback.state.EditorStateManager;
 import com.moulberry.flashback.state.KeyframeTrack;
 import imgui.moulberry90.ImGui;
 import imgui.moulberry90.flag.ImGuiCond;
-import imgui.moulberry90.flag.ImGuiWindowFlags;
 import imgui.moulberry90.type.ImBoolean;
 import net.minecraft.client.resources.language.I18n;
 import org.joml.Vector3d;
@@ -171,17 +170,28 @@ public class CameraInspectorWindow {
         }
 
         if (openNow) {
-            // Appearing must not steal focus: the timeline is where the user goes next, and a window
-            // that grabs focus on open would swallow the click that selects another camera.
+            // Opening as a tab beside the visuals panel is where this belongs: it is the properties
+            // panel for whatever the timeline selected, not another window to arrange. Appearing
+            // means the placement happens once, so the tab can still be dragged elsewhere.
             openNow = false;
-            ImGui.setNextWindowPos(ImGui.getMainViewport().getCenter().x + ReplayUI.scaleUi(150),
-                ImGui.getMainViewport().getCenter().y - ReplayUI.scaleUi(150), ImGuiCond.Appearing, 0.5f, 0.5f);
-            ImGui.setNextWindowSize(ReplayUI.scaleUi(340), ReplayUI.scaleUi(420), ImGuiCond.Appearing);
+            int visualsDock = VisualsWindow.dockNodeId();
+            if (visualsDock != 0) {
+                ImGui.setNextWindowDockID(visualsDock, ImGuiCond.Appearing);
+            } else {
+                // Nothing to dock to - the visuals panel is floating - so appear near the middle.
+                ImGui.setNextWindowPos(ImGui.getMainViewport().getCenter().x + ReplayUI.scaleUi(150),
+                    ImGui.getMainViewport().getCenter().y - ReplayUI.scaleUi(150), ImGuiCond.Appearing, 0.5f, 0.5f);
+                ImGui.setNextWindowSize(ReplayUI.scaleUi(340), ReplayUI.scaleUi(420), ImGuiCond.Appearing);
+            }
         }
 
         windowOpen.set(true);
         String title = I18n.get("flashback.camera_inspector") + "###CameraInspector";
-        if (ImGui.begin(title, windowOpen, ImGuiWindowFlags.NoFocusOnAppearing)) {
+        // Deliberately no NoFocusOnAppearing: a window that appears in a dock node without focus stays
+        // behind whichever tab it docked beside, so the panel would never actually show. Focus is only
+        // taken on the frame the window appears, and the timeline has already handled the click that
+        // opened it.
+        if (ImGui.begin(title, windowOpen)) {
             // No lock is held from here on. Every mutation below takes its own short write stamp.
             drawContents(editorState, replayServer, snapshot, playhead);
         }
