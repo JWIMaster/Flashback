@@ -237,8 +237,6 @@ public final class GuiDisplay {
         if (wrote) {
             menu.getSlot(slot).set(item.copy());
         }
-        if (slot < 12) {
-        }
     }
 
     /**

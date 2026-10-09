@@ -1264,6 +1264,11 @@ public class ReplayGamePacketHandler implements ClientGamePacketListener {
                 if (inventoryIndex < replayViewer.lastFirstPersonHotbarItems.length) {
                     replayViewer.lastFirstPersonHotbarItems[inventoryIndex] = itemStack.copy();
                 }
+                // DIAGNOSTIC (temporary): only the range where a menu index used as an inventory
+                // index would land, which is the armour and the offhand.
+                if (inventoryIndex >= 36 && inventoryIndex <= 44) {
+                    Flashback.LOGGER.info("[slot-diag] menuSlot={} inventoryIndex={} item={}", slot, inventoryIndex, itemStack);
+                }
                 ServerPlayNetworking.send(replayViewer,
                     new FlashbackRemoteSetSlot(player.getId(), inventoryIndex, itemStack.copy()));
             }
