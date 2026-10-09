@@ -17,8 +17,10 @@ import net.minecraft.network.protocol.game.ClientboundMountScreenOpenPacket;
 import net.minecraft.network.protocol.game.ClientboundOpenScreenPacket;
 import net.minecraft.resources.Identifier;
 import net.minecraft.world.inventory.AbstractContainerMenu;
+import net.minecraft.world.inventory.CraftingContainer;
 import net.minecraft.world.inventory.InventoryMenu;
 import net.minecraft.world.inventory.MenuType;
+import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.ItemStack;
 import org.jetbrains.annotations.Nullable;
 
@@ -176,26 +178,38 @@ public final class GuiRecording {
         fillMirror(menu.getItems(), menu.getCarried());
     }
 
-    /** Writes every slot the client has and the server has not said. */
+    /**
+     * Writes the crafting grid the client has and the server has not said.
+     *
+     * <p>Only the grid. It is the one part of a container that is filled entirely by prediction: a
+     * click sends the server a hash of what the client now believes, the server files it as already
+     * known, and the slots are never sent. Everything else in a container is the server's, and it
+     * describes its own changes - writing this side's view of those as well would put the client's
+     * guess where the server's answer belongs, which is exactly what makes a chest look wrong.
+     *
+     * <p>Recognised by the container behind the slot rather than by slot number, because a furnace
+     * and a crafting table put the grid in different places and a hard-coded range would eventually
+     * describe the wrong slot in one of them.
+     */
     private static void writeDifferences(AbstractContainerMenu menu) {
         int slots = Math.min(menu.slots.size(), mirrored.size());
         for (int i = 0; i < slots; i++) {
-            ItemStack now = menu.getSlot(i).getItem();
+            Slot slot = menu.getSlot(i);
+            if (!(slot.container instanceof CraftingContainer)) {
+                continue;
+            }
+            ItemStack now = slot.getItem();
             if (!ItemStack.matches(now, mirrored.get(i))) {
                 mirrored.set(i, now.copy());
-                write(FlashbackRemoteContainer.slot(menu.containerId, i, now));
+                // A copy, because the payload is not encoded until the end of the tick and the
+                // stack it describes belongs to a live menu.
+                write(FlashbackRemoteContainer.slot(menu.containerId, i, now.copy()));
                 // DIAGNOSTIC (temporary)
-                if (i < 12 && !now.isEmpty()) {
+                if (!now.isEmpty()) {
                     Flashback.LOGGER.info("[gui-diag] mirrored container={} slot={} item={}",
                         menu.containerId, i, now);
                 }
             }
-        }
-
-        ItemStack carried = menu.getCarried();
-        if (!ItemStack.matches(carried, mirroredCarried)) {
-            mirroredCarried = carried.copy();
-            write(FlashbackRemoteContainer.carried(menu.containerId, carried));
         }
     }
 

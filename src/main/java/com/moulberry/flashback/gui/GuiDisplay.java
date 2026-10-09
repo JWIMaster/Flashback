@@ -238,8 +238,8 @@ public final class GuiDisplay {
         }
         // DIAGNOSTIC (temporary)
         if (slot < 12) {
-            Flashback.LOGGER.info("[gui-diag] apply slot={} empty={} menu={} wrote={} readBack={}",
-                slot, item.isEmpty(), menu == null ? "none" : menu.getClass().getSimpleName(), wrote,
+            Flashback.LOGGER.info("[gui-diag] apply container={} slot={} empty={} menu={} wrote={} readBack={}",
+                shownId, slot, item.isEmpty(), menu == null ? "none" : menu.getClass().getSimpleName(), wrote,
                 wrote ? menu.getSlot(slot).getItem() : "n/a");
         }
     }
