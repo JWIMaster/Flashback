@@ -233,6 +233,12 @@ public final class GuiDisplay {
     }
 
     private static void applySlot(int slot, ItemStack item) {
+        // DIAGNOSTIC (temporary): the armour is menu slots 5-8, and this is where anything the
+        // recording says is in them arrives. Only these few slots, so it cannot flood anything.
+        if (slot >= 5 && slot <= 8) {
+            com.moulberry.flashback.Flashback.LOGGER.info("[armour-diag] menuSlot={} item={} container={}",
+                slot, item, shownId);
+        }
         boolean wrote = menu != null && slot >= 0 && slot < menu.slots.size();
         if (wrote) {
             menu.getSlot(slot).set(item.copy());
