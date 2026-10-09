@@ -72,6 +72,8 @@
   "flashback.disable_third_person_cancel": "Отключить отмену от третьего лица",
   "flashback.advanced.synchronize_ticking": "Синхронизация тикания",
   "flashback.advanced.synchronize_ticking.description": "Синхронизирует клиент и интегрированный сервер. Работает только в одиночном режиме. Полезно при записи ниже 20 TPS. Может привести к тупиковым ситуациям.",
+  "flashback.advanced.interpolate_to_latest_position": null,
+  "flashback.advanced.interpolate_to_latest_position.description": null,
 
   "flashback.mark.added_with_description": "Добавлен \"%s\" маркер",
   "flashback.mark.added_with_color": "Добавлен #%s маркер",

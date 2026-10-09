@@ -74,6 +74,8 @@
   "flashback.disable_third_person_cancel": "Third-Person-Abbrechen deaktivieren",
   "flashback.advanced.synchronize_ticking": "Ticking synchronisieren",
   "flashback.advanced.synchronize_ticking.description": "Client und integrierten Server im Gleichschritt ticken. Funktioniert nur im Einzelspielermodus. Nützlich bei Replays unter 20 TPS. Kann zu Blockaden führen.",
+  "flashback.advanced.interpolate_to_latest_position": null,
+  "flashback.advanced.interpolate_to_latest_position.description": null,
 
   "flashback.mark.added_with_description": "Marker \"%s\" hinzugefügt",
   "flashback.mark.added_with_color": "#%s Marker hinzugefügt",

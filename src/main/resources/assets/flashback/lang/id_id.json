@@ -72,6 +72,8 @@
   "flashback.disable_third_person_cancel": "Nonaktifkan pembatalan orang ketiga",
   "flashback.advanced.synchronize_ticking": "Sinkronkan Tick Permainan",
   "flashback.advanced.synchronize_ticking.description": "Klien tick dan server terintegrasi bekerja sinkron. Hanya berfungsi dalam mode permainan tunggal. Berguna jika perekaman di bawah 20 TPS. Dapat menyebabkan kebuntuan",
+  "flashback.advanced.interpolate_to_latest_position": null,
+  "flashback.advanced.interpolate_to_latest_position.description": null,
 
   "flashback.mark.added_with_description": "\"%s\" penanda telah ditambahkan",
   "flashback.mark.added_with_color": "#%s penanda telah ditambahkan",

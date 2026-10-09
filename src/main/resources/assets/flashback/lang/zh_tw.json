@@ -494,6 +494,8 @@
     "flashback.description": "描述",
     "flashback.advanced.synchronize_ticking": "同步刻",
     "flashback.advanced.synchronize_ticking.description": "客戶端和整合伺服器同步刻。僅在單人遊戲中有效。在低於 20 TPS 錄製時很有用。可能導致死鎖",
+  "flashback.advanced.interpolate_to_latest_position": null,
+  "flashback.advanced.interpolate_to_latest_position.description": null,
     "flashback.mark.added_with_description": "已新增「%s」標記",
     "flashback.mark.added_with_color": "已新增 #%s 標記",
     "flashback.mark.added": "已新增標記",

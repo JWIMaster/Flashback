@@ -72,6 +72,8 @@
   "flashback.disable_third_person_cancel": "비활성화 삼인칭 취소",
   "flashback.advanced.synchronize_ticking": "틱킹 동기화",
   "flashback.advanced.synchronize_ticking.description": "클라이언트와 통합 서버를 동시에 틱 연산합니다. 싱글 플레이어에서만 작동합니다. 20 TPS 미만으로 녹화하는 경우에 유용합니다. 교착 상태가 발생할 수 있습니다.",
+  "flashback.advanced.interpolate_to_latest_position": null,
+  "flashback.advanced.interpolate_to_latest_position.description": null,
 
   "flashback.mark.added_with_description": "\"%s\" 마커 추가",
   "flashback.mark.added_with_color": "#%s 마커 추가",

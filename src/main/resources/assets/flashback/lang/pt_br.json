@@ -72,6 +72,8 @@
   "flashback.disable_third_person_cancel": "Desativar cancelamento de terceira pessoa",
   "flashback.advanced.synchronize_ticking": "Sincronizar tiques",
   "flashback.advanced.synchronize_ticking.description": "Sincroniza o tick do cliente e do servidor integrado. Funciona apenas fora do modo multijogador. Útil ao gravar com TPS abaixo de 20. Pode resultar em travamentos",
+  "flashback.advanced.interpolate_to_latest_position": null,
+  "flashback.advanced.interpolate_to_latest_position.description": null,
 
   "flashback.mark.added_with_description": "Marcador \"%s\" adicionado",
   "flashback.mark.added_with_color": "Marcador #%s adicionado",

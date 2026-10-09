@@ -1039,14 +1039,24 @@ public class ReplayServer extends IntegratedServer {
                 this.endOfReplayResetSent = false;
             }
 
-            // A crack belongs to the tick it was sent for, and a jump does not replay the packet that
-            // would have stopped it, so the client is told to take them all down. The first-person
-            // state is re-sent for a little while rather than once: the jump may reach the client
-            // before the player it describes does, and a payload for an entity that is not there yet
-            // is dropped.
-            for (ReplayPlayer replayViewer : this.getReplayViewers()) {
-                ServerPlayNetworking.send(replayViewer, FlashbackClearBlockDestruction.INSTANCE);
-                if (skippedTicks) {
+            // A crack belongs to the tick it was sent for, and a jump over ticks does not replay the
+            // packet that would have stopped it, so the client is told to take them all down. A jump of
+            // one tick is not that: it is the next tick, stepped through like any other, and an export
+            // moves to the next tick for every frame it renders. Clearing there took every crack down
+            // once per exported tick, so a block being mined flickered in the video while the same
+            // moment played back smoothly. The first-person state is re-sent for a little while rather
+            // than once: the jump may reach the client before the player it describes does, and a
+            // payload for an entity that is not there yet is dropped.
+            if (skippedTicks) {
+                for (ReplayPlayer replayViewer : this.getReplayViewers()) {
+                    ServerPlayNetworking.send(replayViewer, FlashbackClearBlockDestruction.INSTANCE);
+                    // Everything on screen is put where it is now and the particles are taken with it.
+                    // Without this the first frame after a skipped stretch draws every entity sliding
+                    // in from where it was before the stretch, and that blend - not the cut itself - is
+                    // what tells the eye that a piece of video was removed. A cut has to start on a
+                    // frame that is already settled.
+                    ServerPlayNetworking.send(replayViewer, FlashbackInstantlyLerp.INSTANCE);
+                    ServerPlayNetworking.send(replayViewer, FlashbackClearParticles.INSTANCE);
                     replayViewer.resendFirstPersonTicks = 20;
                 }
             }

@@ -80,6 +80,8 @@
   "flashback.disable_third_person_cancel": "Disable third-person cancel",
   "flashback.advanced.synchronize_ticking": "Synchronize Ticking",
   "flashback.advanced.synchronize_ticking.description": "Tick client and integrated server in lockstep. Only works in singleplayer. Useful if recording below 20 TPS. May result in deadlocks",
+  "flashback.advanced.interpolate_to_latest_position": "Interpolate Replay Entities to Their Latest Position",
+  "flashback.advanced.interpolate_to_latest_position.description": "Stops replay entities stepping backwards when a position update arrives. Turn off to compare against the old behaviour",
   "flashback.advanced.ignored_custom_packets": "Ignored Custom Payloads",
   "flashback.advanced.ignored_custom_packets.description": "Custom payloads to ignore from mods, primarily useful to workaround problematic mods",
 

@@ -72,6 +72,8 @@
   "flashback.disable_third_person_cancel": "Vypnout omezení pohledu třetí osoby",
   "flashback.advanced.synchronize_ticking": "Synchronizovat tiky",
   "flashback.advanced.synchronize_ticking.description": "Klient a integrovaný server budou postupovat najednou. Funguje pouze v režimu hry jednoho hráče. Užitečné při nahrávání pod 20 TPS. Může vést k uvíznutí",
+  "flashback.advanced.interpolate_to_latest_position": null,
+  "flashback.advanced.interpolate_to_latest_position.description": null,
 
   "flashback.mark.added_with_description": "Přidána značka \"%s\"",
   "flashback.mark.added_with_color": "Přidána značka #%s",

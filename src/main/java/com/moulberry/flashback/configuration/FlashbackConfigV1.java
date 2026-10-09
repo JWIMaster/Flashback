@@ -286,6 +286,10 @@ public class FlashbackConfigV1 {
         @LatticeWidgetButton
         public boolean synchronizeTicking = false;
 
+        @LatticeOption(title = "flashback.advanced.interpolate_to_latest_position", description = "!!.description")
+        @LatticeWidgetButton
+        public boolean interpolateToLatestPosition = true;
+
         @LatticeOption(title = "flashback.advanced.ignored_custom_packets", description = "!!.description")
         @LatticeWidgetTextArea
         public String ignoredCustomPayloads = "";

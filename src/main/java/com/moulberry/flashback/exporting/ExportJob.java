@@ -371,6 +371,12 @@ public class ExportJob {
             lastClientTickDouble = tickInfo.clientTick;
             double partialClientTick = tickInfo.clientTick - (int) tickInfo.clientTick;
 
+            // A frame whose predecessor is more than a tick away begins right after a removed stretch,
+            // and one whose successor is more than a tick away ends right before one. Those are the two
+            // frames where the exported picture and sound are a join rather than continuous footage.
+            boolean afterCut = tickIndex > 0 && tickInfo.serverTick - ticks.get(tickIndex - 1).serverTick > 1.0;
+            boolean beforeCut = tickIndex + 1 < ticks.size() && ticks.get(tickIndex + 1).serverTick - tickInfo.serverTick > 1.0;
+
             // Wait until server is on correct replay tick
             long start = System.nanoTime();
             this.setServerTickAndWait(replayServer, targetServerTick, false);
@@ -511,6 +517,7 @@ public class ExportJob {
 
                         audioBuffer = ByteBuffer.allocateDirect(renderSamples * 4 * channels).order(ByteOrder.nativeOrder()).asFloatBuffer();
                         SOFTLoopback.alcRenderSamplesSOFT(device, audioBuffer, renderSamples);
+                        applyCutFade(audioBuffer, channels, afterCut, beforeCut);
                     }
                     saveable.audioBuffer = audioBuffer;
 
@@ -548,6 +555,7 @@ public class ExportJob {
 
                     audioBuffer = ByteBuffer.allocateDirect(renderSamples * 4 * channels).order(ByteOrder.nativeOrder()).asFloatBuffer();
                     SOFTLoopback.alcRenderSamplesSOFT(device, audioBuffer, renderSamples);
+                    applyCutFade(audioBuffer, channels, afterCut, beforeCut);
                 }
                 saveable.audioBuffer = audioBuffer;
 
@@ -1181,6 +1189,38 @@ public class ExportJob {
     }
 
     private record TickInfo(double serverTick, double clientTick, boolean frozen) {}
+
+    /**
+     * Rounds the first and last moments of the audio either side of a cut.
+     *
+     * <p>A cut puts two pieces of sound next to each other that were never neighbours, and stepping
+     * from one sample to an unrelated one is a click. A couple of milliseconds of ramp is shorter than
+     * anything anyone hears and takes the click away, which is what cutting a clip in an editor does.
+     */
+    private static void applyCutFade(FloatBuffer audio, int channels, boolean fadeIn, boolean fadeOut) {
+        if (audio == null || channels <= 0 || (!fadeIn && !fadeOut)) {
+            return;
+        }
+
+        int frames = audio.limit() / channels;
+        int ramp = Math.min(frames, 96);
+        for (int i = 0; i < ramp; i++) {
+            float amount = (i + 1) / (float) ramp;
+            if (fadeIn) {
+                for (int channel = 0; channel < channels; channel++) {
+                    int index = i * channels + channel;
+                    audio.put(index, audio.get(index) * amount);
+                }
+            }
+            if (fadeOut) {
+                int frame = frames - 1 - i;
+                for (int channel = 0; channel < channels; channel++) {
+                    int index = frame * channels + channel;
+                    audio.put(index, audio.get(index) * amount);
+                }
+            }
+        }
+    }
 
     /**
      * Drops the frames inside cut stretches and slides the client timeline up behind them.

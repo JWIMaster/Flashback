@@ -72,6 +72,8 @@
   "flashback.disable_third_person_cancel": "三人称キャンセルを無効化",
   "flashback.advanced.synchronize_ticking": "ティック同期",
   "flashback.advanced.synchronize_ticking.description": "ティッククライアントと統合サーバーを同期。シングルプレイでのみ有効。20TPS以下での録画で有効。デッドロック発生の可能性あり",
+  "flashback.advanced.interpolate_to_latest_position": null,
+  "flashback.advanced.interpolate_to_latest_position.description": null,
 
   "flashback.mark.added_with_description": "\"%s\" マーカーを追加しました",
   "flashback.mark.added_with_color": "#%s マーカーを追加しました",

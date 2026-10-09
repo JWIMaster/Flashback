@@ -2392,6 +2392,12 @@ public class TimelineWindow {
     }
 
     private static void handleCanvasClick(Frame f, boolean left, boolean right) {
+        // Pressing on the timeline gives up a marked stretch, so a mark can be dismissed by clicking
+        // the same place again instead of only from the keyboard. Marking is done on the ruler, so
+        // nothing here can start one by accident.
+        if (left && hasRangeSelection()) {
+            clearRangeSelection();
+        }
         selectedShotStart = -1;
         int rowIndex = f.rowAt(f.mouseY);
         KeyframeTrack track = f.layout.trackAt(rowIndex);

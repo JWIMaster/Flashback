@@ -72,6 +72,8 @@
   "flashback.disable_third_person_cancel": "Wyłącz anulowanie w trybie trzeciej osoby",
   "flashback.advanced.synchronize_ticking": "Synchronizuj tikowanie",
   "flashback.advanced.synchronize_ticking.description": "Wymusza synchronizację tików klienta i zintegrowanego serwera. Działa tylko w trybie jednoosobowym. Użyteczne przy nagrywaniu poniżej 20 TPS. Może prowadzić do deadlocków",
+  "flashback.advanced.interpolate_to_latest_position": null,
+  "flashback.advanced.interpolate_to_latest_position.description": null,
 
   "flashback.mark.added_with_description": "Dodano znacznik \"%s\"",
   "flashback.mark.added_with_color": "Dodano znacznik #%s",

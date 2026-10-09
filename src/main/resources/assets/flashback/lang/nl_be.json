@@ -74,6 +74,8 @@
   "flashback.disable_third_person_cancel": "Third-person annuleren uitschakelen",
   "flashback.advanced.synchronize_ticking": "Tick Synchroniseren",
   "flashback.advanced.synchronize_ticking.description": "Synchroniseer client en geïntegreerde server in lockstep. Werkt alleen in singleplayer. Handig bij opnemen onder 20 TPS. Kan deadlocks veroorzaken",
+  "flashback.advanced.interpolate_to_latest_position": null,
+  "flashback.advanced.interpolate_to_latest_position.description": null,
 
   "flashback.mark.added_with_description": "\"%s\" marker toegevoegd",
   "flashback.mark.added_with_color": "#%s marker toegevoegd",

@@ -285,10 +285,17 @@ public class ContainerGuiCheck {
         if (jump < 0) {
             return;
         }
-        String after = server.substring(jump, Math.min(server.length(), jump + 1600));
+        String after = server.substring(jump, Math.min(server.length(), jump + 3400));
         check("a seek clears the crack overlay", after.contains("FlashbackClearBlockDestruction"));
         check("a seek re-sends the first-person state over several ticks",
             after.contains("resendFirstPersonTicks"));
+        // Only a seek that actually skips ticks does either of those. An export steps to the next tick
+        // for every frame it renders, and clearing there took the cracks down once per exported frame,
+        // which is what made a mined block flicker in the exported video while playing it looked fine.
+        check("a one-tick step is not treated as a seek",
+            after.contains("boolean skippedTicks = Math.abs(this.targetTick - tickBeforeJump) > 1;"));
+        check("the crack overlay is only cleared on a real seek",
+            after.indexOf("FlashbackClearBlockDestruction") > after.indexOf("boolean skippedTicks"));
 
         String player = Files.readString(root.resolve("com/moulberry/flashback/playback/ReplayPlayer.java"));
         check("the resend window is state on the viewer", player.contains("resendFirstPersonTicks"));
