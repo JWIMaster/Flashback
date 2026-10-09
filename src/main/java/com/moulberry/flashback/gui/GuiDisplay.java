@@ -9,7 +9,6 @@ import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.inventory.HorseInventoryScreen;
 import net.minecraft.client.gui.screens.inventory.InventoryScreen;
 import net.minecraft.client.gui.screens.inventory.NautilusInventoryScreen;
-import net.minecraft.client.player.AbstractClientPlayer;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
@@ -120,8 +119,6 @@ public final class GuiDisplay {
     }
 
     private static void open(FlashbackRemoteContainer container) {
-        // DIAGNOSTIC (temporary)
-        Flashback.LOGGER.info("[gui-diag] open container={} type={}", container.containerId(), container.menuType());
         clear();
         shownId = container.containerId();
         menuType = container.menuType() == null ? "" : container.menuType();
@@ -178,9 +175,6 @@ public final class GuiDisplay {
             }
             menu = built;
             screen = containerScreen(type, built, detached, title);
-            // DIAGNOSTIC (temporary)
-            Flashback.LOGGER.info("[gui-diag] built type={} slots={} screen={}", menuType, built.slots.size(),
-                screen == null ? "none" : screen.getClass().getSimpleName());
         } catch (Throwable t) {
             Flashback.LOGGER.warn("Could not build the screen for the recorded container {}", menuType, t);
             menu = null;
@@ -232,15 +226,8 @@ public final class GuiDisplay {
     }
 
     private static void applySlot(int slot, ItemStack item) {
-        boolean wrote = menu != null && slot >= 0 && slot < menu.slots.size();
-        if (wrote) {
+        if (menu != null && slot >= 0 && slot < menu.slots.size()) {
             menu.getSlot(slot).set(item.copy());
-        }
-        // DIAGNOSTIC (temporary)
-        if (slot < 12) {
-            Flashback.LOGGER.info("[gui-diag] apply slot={} empty={} menu={} wrote={} readBack={}",
-                slot, item.isEmpty(), menu == null ? "none" : menu.getClass().getSimpleName(), wrote,
-                wrote ? menu.getSlot(slot).getItem() : "n/a");
         }
     }
 
@@ -326,20 +313,6 @@ public final class GuiDisplay {
         }
     }
 
-    /**
-     * Whether the camera is looking through a player's eyes, which is the only place a replay's
-     * container belongs.
-     *
-     * <p>This is the same thing {@code Flashback.getSpectatingPlayer} answers, asked without its
-     * checks for a camera that has briefly been left pointing at an entity the replay has already
-     * replaced: those are for deciding whether to read a player's inventory, and here they would
-     * blink the window off for a frame whenever an entity was swapped.
-     */
-    private static boolean cameraIsOnAPlayer(Minecraft minecraft) {
-        Entity camera = minecraft.getCameraEntity();
-        return camera instanceof AbstractClientPlayer player && player != minecraft.player;
-    }
-
     /** Draws the container, if there is one. Called from the HUD render pass. */
     public static void extract(GuiGraphicsExtractor graphics) {
         Screen drawing = screen;
@@ -358,12 +331,6 @@ public final class GuiDisplay {
         }
         if (minecraft.gui != null && minecraft.gui.hud != null && minecraft.gui.hud.isHidden()) {
             // F1 hides the interface; a container the recording had open is part of it.
-            return;
-        }
-        if (!cameraIsOnAPlayer(minecraft)) {
-            // The container belongs to the player being recorded, so it is only part of the picture
-            // when the camera is that player's eyes. On a free or orbit camera it would be a window
-            // floating over a shot nobody is looking through.
             return;
         }
 
