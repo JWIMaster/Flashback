@@ -1,10 +1,13 @@
 package com.moulberry.flashback.keyframe;
 
+import com.moulberry.flashback.combo_options.WeatherOverride;
 import com.moulberry.flashback.keyframe.change.KeyframeChange;
 import com.moulberry.flashback.keyframe.change.KeyframeChangeCameraPositionOrbit;
+import com.moulberry.flashback.keyframe.change.KeyframeChangeWeather;
 import com.moulberry.flashback.keyframe.change.OrbitFollowDelay;
 import com.moulberry.flashback.keyframe.handler.KeyframeHandler;
 import com.moulberry.flashback.keyframe.impl.CameraOrbitKeyframe;
+import com.moulberry.flashback.keyframe.impl.WeatherKeyframe;
 import com.moulberry.flashback.keyframe.interpolation.InterpolationType;
 import org.joml.Vector3d;
 import java.util.UUID;
@@ -125,6 +128,31 @@ public class OrbitTest {
         check("applying keeps the selected player", playerId.equals(((KeyframeChangeCameraPositionOrbit) selected.createChange()).target()));
         KeyframeChange interpolated = following.createChange().interpolate(anchored.createChange(), 0.5);
         check("interpolating keeps the choice", ((KeyframeChangeCameraPositionOrbit) interpolated).centreOnTarget());
+
+        // Weather is a state, not a number. A span from clear to a thunderstorm must step at its
+        // midpoint rather than pass through states that were never chosen.
+        KeyframeChange clear = new WeatherKeyframe(WeatherOverride.CLEAR).createChange();
+        KeyframeChange storm = new WeatherKeyframe(WeatherOverride.THUNDERING).createChange();
+        check("weather before the midpoint is still the left state",
+            ((KeyframeChangeWeather) clear.interpolate(storm, 0.49)).mode() == WeatherOverride.CLEAR);
+        check("weather after the midpoint is the right state",
+            ((KeyframeChangeWeather) clear.interpolate(storm, 0.51)).mode() == WeatherOverride.THUNDERING);
+        check("weather at the midpoint has already stepped",
+            ((KeyframeChangeWeather) clear.interpolate(storm, 0.5)).mode() == WeatherOverride.THUNDERING);
+        KeyframeChange somethingElse = new KeyframeChange() {
+            @Override
+            public void apply(KeyframeHandler handler) {
+            }
+
+            @Override
+            public KeyframeChange interpolate(KeyframeChange to, double amount) {
+                return this;
+            }
+        };
+        check("interpolating to a different kind of change keeps this one",
+            clear.interpolate(somethingElse, 0.9) == clear);
+        check("a weather keyframe keeps its state when copied",
+            ((WeatherKeyframe) new WeatherKeyframe(WeatherOverride.SNOWING).copy()).mode == WeatherOverride.SNOWING);
 
         lagChecks();
 

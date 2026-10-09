@@ -5,6 +5,7 @@ import com.mojang.blaze3d.platform.InputConstants;
 import com.mojang.blaze3d.platform.Window;
 import com.moulberry.flashback.Flashback;
 import com.moulberry.flashback.configuration.FlashbackConfigV1;
+import com.moulberry.flashback.editor.ui.windows.CameraInspectorWindow;
 import com.moulberry.flashback.editor.ui.windows.ExportDoneWindow;
 import com.moulberry.flashback.editor.ui.windows.ExportQueueWindow;
 import com.moulberry.flashback.editor.ui.windows.ExportScreenshotWindow;
@@ -873,6 +874,7 @@ public class ReplayUI {
 
         VisualsWindow.render();
         TimelineWindow.render();
+        CameraInspectorWindow.render();
         StartExportWindow.render();
         ExportScreenshotWindow.render();
         PreferencesWindow.render();

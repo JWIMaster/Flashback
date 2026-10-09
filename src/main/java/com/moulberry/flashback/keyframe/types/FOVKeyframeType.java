@@ -55,8 +55,8 @@ public class FOVKeyframeType implements KeyframeType<FOVKeyframe> {
     public KeyframeCreatePopup<FOVKeyframe> createPopup() {
         float[] fovKeyframeInput = new float[]{Minecraft.getInstance().options.fov().get()};
         EditorState editorState = EditorStateManager.getCurrent();
-        if (editorState != null && editorState.replayVisuals.overrideFov) {
-            fovKeyframeInput[0] = editorState.replayVisuals.overrideFovAmount;
+        if (editorState != null && editorState.replayVisuals.cameraVisuals().overrideFov) {
+            fovKeyframeInput[0] = editorState.replayVisuals.cameraVisuals().overrideFovAmount;
         }
 
         return () -> {

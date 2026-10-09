@@ -18,12 +18,20 @@ import com.moulberry.flashback.keyframe.Keyframe;
 import com.moulberry.flashback.keyframe.KeyframeRegistry;
 import com.moulberry.flashback.keyframe.KeyframeType;
 import com.moulberry.flashback.keyframe.handler.MinecraftKeyframeHandler;
+import com.moulberry.flashback.keyframe.impl.CameraFovKeyframe;
 import com.moulberry.flashback.keyframe.impl.CameraKeyframe;
 import com.moulberry.flashback.keyframe.impl.CameraOrbitKeyframe;
+import com.moulberry.flashback.keyframe.impl.CameraPositionKeyframe;
+import com.moulberry.flashback.keyframe.impl.CameraRotationKeyframe;
+import com.moulberry.flashback.keyframe.impl.CameraShakeKeyframe;
 import com.moulberry.flashback.keyframe.impl.CameraSwitchKeyframe;
 import com.moulberry.flashback.keyframe.impl.TimelapseKeyframe;
 import com.moulberry.flashback.keyframe.interpolation.InterpolationType;
+import com.moulberry.flashback.keyframe.types.CameraFovKeyframeType;
 import com.moulberry.flashback.keyframe.types.CameraKeyframeType;
+import com.moulberry.flashback.keyframe.types.CameraPositionKeyframeType;
+import com.moulberry.flashback.keyframe.types.CameraRotationKeyframeType;
+import com.moulberry.flashback.keyframe.types.CameraShakeKeyframeType;
 import com.moulberry.flashback.keyframe.types.TimelapseKeyframeType;
 import com.moulberry.flashback.playback.ReplayServer;
 import com.moulberry.flashback.record.FlashbackMeta;
@@ -66,6 +74,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.TreeMap;
+import java.util.UUID;
 
 /**
  * The timeline window.
@@ -200,6 +209,10 @@ public class TimelineWindow {
     @Nullable
     private static EditorCamera pendingRenameCamera;
     private static boolean openRenameCameraPopup;
+    /** The camera a row menu asked to delete, waiting for the confirmation popup. */
+    @Nullable
+    private static EditorCamera pendingDeleteCamera;
+    private static boolean openDeleteCameraPopup;
 
     private static boolean copyRelativeToPosition;
     private static boolean copyRelativeToYaw;
@@ -209,8 +222,38 @@ public class TimelineWindow {
     private static boolean enablePaintActive;
     private static boolean enablePaintValue;
 
+    /**
+     * The playhead in replay ticks.
+     *
+     * <p>The camera inspector keys at this tick, so there is exactly one answer to "where is the
+     * playhead" rather than the inspector guessing from the replay server, which during a scrub is a
+     * tick behind what is drawn.
+     */
     public static int getCursorTick() {
         return cursorTicks;
+    }
+
+    /** A tick as the timeline labels it, for the inspector to name the playhead with. */
+    public static String formatTick(int tick) {
+        return ticksToTimestamp(tick);
+    }
+
+    /**
+     * Takes the write lock for the scene, releasing the read lock held for this frame.
+     *
+     * <p>Shared with the camera inspector, which edits the same scene in the same frame: the stamp
+     * is passed in and back so each window owns exactly one stamp, and no window can release another
+     * one's lock.
+     */
+    public static long upgradeToWrite(EditorState state, long stamp, boolean alreadyWrite) {
+        if (alreadyWrite) {
+            return stamp;
+        }
+        state.release(stamp);
+        long writeStamp = state.acquireWrite();
+        sceneStamp = writeStamp;
+        sceneStampIsWrite = true;
+        return writeStamp;
     }
 
     // -- Frame -----------------------------------------------------------------------------------
@@ -576,6 +619,7 @@ public class TimelineWindow {
         record DeleteTrack(KeyframeTrack track) implements RowAction {}
         record ClearTrack(KeyframeTrack track) implements RowAction {}
         record DeleteCamera(EditorCamera camera) implements RowAction {}
+        record DuplicateCamera(EditorCamera camera) implements RowAction {}
         record RenameCamera(EditorCamera camera) implements RowAction {}
         record AddTrack(EditorCamera camera, KeyframeType<?> type) implements RowAction {}
         record ApplyKeyframe(KeyframeTrack track, int tick, Keyframe keyframe) implements RowAction {}
@@ -1050,6 +1094,11 @@ public class TimelineWindow {
             drawList.addRectFilled(left, top, right, bottom, TimelineColours.alpha(accent, live ? 0x2E : 0x16));
             // A solid strip in the camera's colour is the camera's identity for the whole row.
             drawList.addRectFilled(left, top, left + 3, bottom, accent);
+            if (CameraInspectorWindow.isSelected(group.camera())) {
+                // Object selection, drawn like every other selection on the timeline but inset so it
+                // reads as "this object" rather than as a marked keyframe or a hovering pointer.
+                drawList.addRect(left + 1, top + 1, right - 1, bottom - 1, SELECTED_OUTLINE);
+            }
             if (hovered) {
                 drawList.addRectFilled(left, top, right, bottom, TimelineColours.ROW_HOVER);
             }
@@ -1154,8 +1203,13 @@ public class TimelineWindow {
         drawList.pushClipRect(cursorX - 2, top, Math.max(cursorX, nameRight), bottom, true);
         ImGui.textColored(accent, kindIcon + name);
         drawList.popClipRect();
-        if (ImGui.isItemClicked(ImGuiMouseButton.Left) && ImGui.isMouseDoubleClicked(ImGuiMouseButton.Left)) {
-            action = new RowAction.RenameCamera(camera);
+        // A single click on the row's name selects the camera object and opens its inspector; a
+        // double click is still rename, so the two gestures do not fight over the same item.
+        if (ImGui.isItemClicked(ImGuiMouseButton.Left)) {
+            CameraInspectorWindow.select(camera);
+            if (ImGui.isMouseDoubleClicked(ImGuiMouseButton.Left)) {
+                action = new RowAction.RenameCamera(camera);
+            }
         }
         ImGuiHelper.tooltip(I18n.get("flashback.camera_kind." + camera.kind.name().toLowerCase(Locale.ROOT)));
 
@@ -1197,6 +1251,9 @@ public class TimelineWindow {
             ImGui.separator();
             if (ImGui.menuItem("\ue3c9 " + I18n.get("flashback.rename") + "##renameCamera")) {
                 action = new RowAction.RenameCamera(camera);
+            }
+            if (ImGui.menuItem("\ue14d " + I18n.get("flashback.duplicate") + "##duplicateCamera")) {
+                action = new RowAction.DuplicateCamera(camera);
             }
             if (ImGui.menuItem("\ue872 " + I18n.get("flashback.delete_camera") + "##deleteCamera")) {
                 action = new RowAction.DeleteCamera(camera);
@@ -1415,8 +1472,17 @@ public class TimelineWindow {
     @Nullable
     private static RowAction drawRowMenu(TimelineRow row) {
         if (row instanceof TimelineRow.CameraGroup group) {
+            // The camera's own row offers the whole object's actions, delete included: the camera and
+            // its rows are one thing, so the way to remove it has to be on the row that names it.
             if (ImGui.menuItem("\ue3c9 " + I18n.get("flashback.rename") + "##rowRename")) {
                 return new RowAction.RenameCamera(group.camera());
+            }
+            if (ImGui.menuItem("\ue14d " + I18n.get("flashback.duplicate") + "##rowDuplicate")) {
+                return new RowAction.DuplicateCamera(group.camera());
+            }
+            ImGui.separator();
+            if (ImGui.menuItem("\ue872 " + I18n.get("flashback.delete_camera") + "##rowDeleteCamera")) {
+                return new RowAction.DeleteCamera(group.camera());
             }
             return null;
         }
@@ -1485,11 +1551,22 @@ public class TimelineWindow {
         if (action == null) {
             return;
         }
-        upgradeToWrite();
+        sceneStamp = upgradeToWrite(editorState, sceneStamp, sceneStampIsWrite);
         switch (action) {
             case RowAction.DeleteTrack delete -> TimelineEdits.deleteTrack(scene, editorState, delete.track());
             case RowAction.ClearTrack clear -> TimelineEdits.clearTrack(scene, editorState, clear.track());
-            case RowAction.DeleteCamera delete -> TimelineEdits.deleteCamera(scene, editorState, delete.camera());
+            case RowAction.DeleteCamera delete -> {
+                // The same confirmation the inspector's header uses: deleting a camera takes all of
+                // its rows and keyframes with it, so it is never one menu click away from happening.
+                pendingDeleteCamera = delete.camera();
+                openDeleteCameraPopup = true;
+            }
+            case RowAction.DuplicateCamera duplicate -> {
+                EditorCamera copy = duplicateCamera(scene, editorState, duplicate.camera());
+                if (copy != null) {
+                    CameraInspectorWindow.select(copy);
+                }
+            }
             case RowAction.RenameCamera rename -> {
                 pendingRenameCamera = rename.camera();
                 cameraNameString = ImGuiHelper.createResizableImString(scene.displayNameOf(rename.camera()));
@@ -1529,18 +1606,32 @@ public class TimelineWindow {
 
         if (ImGuiHelper.beginPopup("##AddElement")) {
             if (ImGui.menuItem("\ue04b " + I18n.get("flashback.new_camera") + "##addCamera")) {
-                upgradeToWrite();
+                sceneStamp = upgradeToWrite(editorState, sceneStamp, sceneStampIsWrite);
                 TimelineEdits.addCamera(scene, editorState, EditorCamera.Kind.FREE, f.cursorTicks);
                 ImGui.closeCurrentPopup();
             }
             if (ImGui.menuItem("\ue577 " + I18n.get("flashback.new_orbit_camera") + "##addOrbitCamera")) {
-                upgradeToWrite();
+                sceneStamp = upgradeToWrite(editorState, sceneStamp, sceneStampIsWrite);
                 TimelineEdits.addCamera(scene, editorState, EditorCamera.Kind.ORBIT, f.cursorTicks);
                 ImGui.closeCurrentPopup();
             }
             if (ImGui.menuItem("\ue7fd " + I18n.get("flashback.new_spectate_camera") + "##addSpectateCamera")) {
-                upgradeToWrite();
+                sceneStamp = upgradeToWrite(editorState, sceneStamp, sceneStampIsWrite);
                 TimelineEdits.addCamera(scene, editorState, EditorCamera.Kind.SPECTATE, f.cursorTicks);
+                ImGui.closeCurrentPopup();
+            }
+            // Duplicating copies what you are working on: the selected camera if there is one, and
+            // otherwise whichever camera is being output at the playhead.
+            UUID selectedId = CameraInspectorWindow.selectedCameraId();
+            EditorCamera duplicateSource = selectedId != null ? scene.cameraById(selectedId) : scene.resolveCameraAt(f.cursorTicks);
+            if (ImGui.menuItem("\ue14d " + I18n.get("flashback.duplicate_camera") + "##duplicateCameraFromAdd",
+                    null, false, duplicateSource != null)) {
+                if (duplicateSource != null) {
+                    EditorCamera copy = duplicateCamera(scene, editorState, duplicateSource);
+                    if (copy != null) {
+                        CameraInspectorWindow.select(copy);
+                    }
+                }
                 ImGui.closeCurrentPopup();
             }
             ImGui.separator();
@@ -1550,7 +1641,7 @@ public class TimelineWindow {
                     continue;
                 }
                 if (ImGui.selectable(type.name() + "##addSceneTrack")) {
-                    upgradeToWrite();
+                    sceneStamp = upgradeToWrite(editorState, sceneStamp, sceneStampIsWrite);
                     int index = scene.keyframeTracks.size();
                     TimelineEdits.push(scene, editorState,
                         List.of(new EditorSceneHistoryAction.RemoveTrack(type, index)),
@@ -1607,7 +1698,7 @@ public class TimelineWindow {
                 ImGui.pushID(i);
                 boolean selected = i == editorState.getSceneIndex();
                 if (ImGui.selectable(scenes.get(i).name, selected) && !selected) {
-                    upgradeToWrite();
+                    sceneStamp = upgradeToWrite(editorState, sceneStamp, sceneStampIsWrite);
                     editorState.setSceneIndex(i, sceneStamp);
                 }
                 ImGui.popID();
@@ -1632,7 +1723,7 @@ public class TimelineWindow {
             if (ImGui.button(I18n.get("flashback.create")) || ReplayUI.consumeConfirm()) {
                 String name = ImGuiHelper.getString(sceneNameString).trim();
                 if (!name.isEmpty()) {
-                    upgradeToWrite();
+                    sceneStamp = upgradeToWrite(editorState, sceneStamp, sceneStampIsWrite);
                     scenes.add(new EditorScene(name));
                     editorState.setSceneIndex(scenes.size() - 1, sceneStamp);
                     editorState.markDirty();
@@ -1652,7 +1743,7 @@ public class TimelineWindow {
             if (ImGui.button(I18n.get("flashback.rename")) || ReplayUI.consumeConfirm()) {
                 String name = ImGuiHelper.getString(sceneNameString).trim();
                 if (!name.isEmpty()) {
-                    upgradeToWrite();
+                    sceneStamp = upgradeToWrite(editorState, sceneStamp, sceneStampIsWrite);
                     scene.name = name;
                     editorState.markDirty();
                     ImGui.closeCurrentPopup();
@@ -1670,7 +1761,7 @@ public class TimelineWindow {
                 ImGui.textUnformatted(I18n.get("flashback.delete_scene_confirm1"));
                 ImGui.textUnformatted(I18n.get("flashback.delete_scene_confirm2"));
                 if (ImGui.button(I18n.get("flashback.delete_forever"))) {
-                    upgradeToWrite();
+                    sceneStamp = upgradeToWrite(editorState, sceneStamp, sceneStampIsWrite);
                     int index = editorState.getSceneIndex();
                     scenes.remove(index);
                     if (index >= scenes.size()) {
@@ -2487,6 +2578,9 @@ public class TimelineWindow {
         }
 
         EditorScene.Shot shot = hit.shot();
+        // Clicking a shot is a click on the camera that is showing: it selects that camera object
+        // and opens its inspector, which is the same thing clicking the camera's row does.
+        CameraInspectorWindow.select(shot.camera());
         if (right) {
             SELECTION.clear();
             selectedShotStart = shot.startTick();
@@ -2654,7 +2748,7 @@ public class TimelineWindow {
             // Nothing moved, so there is nothing worth an undo step.
             return;
         }
-        upgradeToWrite();
+        sceneStamp = upgradeToWrite(editorState, sceneStamp, sceneStampIsWrite);
         TimelineEdits.setCuts(scene, editorState, before, after,
             I18n.get(restore ? "flashback.timeline.restore_cut" : "flashback.timeline.cut_out"));
     }
@@ -2674,7 +2768,7 @@ public class TimelineWindow {
         if (sameCuts(before, after)) {
             return;
         }
-        upgradeToWrite();
+        sceneStamp = upgradeToWrite(editorState, sceneStamp, sceneStampIsWrite);
         TimelineEdits.setCuts(scene, editorState, before, after, I18n.get("flashback.timeline.restore_cut"));
     }
 
@@ -2861,7 +2955,7 @@ public class TimelineWindow {
             }
             case Drag.ExportEdge edge -> {
                 int tick = snapTick(f, f.tickAtX(f.mouseX));
-                upgradeToWrite();
+                sceneStamp = upgradeToWrite(editorState, sceneStamp, sceneStampIsWrite);
                 if (edge.start) {
                     scene.setExportTicks(tick, -1, f.totalTicks);
                 } else {
@@ -2948,7 +3042,7 @@ public class TimelineWindow {
             if (edge.target >= 0 && edge.target != edge.cutTick) {
                 // Without the write stamp the edit would be made against the read snapshot and then
                 // thrown away when the snapshot is released, so the drag would appear to do nothing.
-                upgradeToWrite();
+                sceneStamp = upgradeToWrite(editorState, sceneStamp, sceneStampIsWrite);
                 TimelineEdits.moveCut(scene, editorState, edge.cutTick, edge.target);
                 selectedShotStart = edge.target;
             }
@@ -2957,13 +3051,13 @@ public class TimelineWindow {
             // that put the boundary back where it found it records nothing.
             List<TimelineCut> after = snapshotCuts();
             if (!sameCuts(edge.before, after)) {
-                upgradeToWrite();
+                sceneStamp = upgradeToWrite(editorState, sceneStamp, sceneStampIsWrite);
                 TimelineEdits.setCuts(scene, editorState, edge.before, after,
                     I18n.get("flashback.timeline.adjusted_cut"));
             }
         } else if (finished instanceof Drag.ShotBody body) {
             if (body.delta != 0) {
-                upgradeToWrite();
+                sceneStamp = upgradeToWrite(editorState, sceneStamp, sceneStampIsWrite);
                 TimelineEdits.slideShot(scene, editorState, body.startTick, body.endTick, body.delta);
                 selectedShotStart = Math.max(0, body.startTick + body.delta);
             }
@@ -2984,7 +3078,7 @@ public class TimelineWindow {
         if (row.slot < 0 || !f.layout.wouldMove(row.rowIndex, row.slot)) {
             return;
         }
-        upgradeToWrite();
+        sceneStamp = upgradeToWrite(editorState, sceneStamp, sceneStampIsWrite);
         if (f.layout.row(row.rowIndex) instanceof TimelineRow.CameraGroup) {
             List<EditorCamera> order = f.layout.cameraOrderAfterMove(row.rowIndex, row.slot);
             if (!order.isEmpty()) {
@@ -3007,7 +3101,7 @@ public class TimelineWindow {
         if (delta == 0) {
             return;
         }
-        upgradeToWrite();
+        sceneStamp = upgradeToWrite(editorState, sceneStamp, sceneStampIsWrite);
 
         List<EditorSceneHistoryAction> undo = new ArrayList<>();
         List<EditorSceneHistoryAction> redo = new ArrayList<>();
@@ -3360,12 +3454,12 @@ public class TimelineWindow {
         }
 
         if (Keybinds.UNDO.isPressed(false)) {
-            upgradeToWrite();
+            sceneStamp = upgradeToWrite(editorState, sceneStamp, sceneStampIsWrite);
             scene.undo(editorState, ReplayUI::setInfoOverlayShort);
             editorState.markDirty();
         }
         if (Keybinds.REDO.isPressed(false)) {
-            upgradeToWrite();
+            sceneStamp = upgradeToWrite(editorState, sceneStamp, sceneStampIsWrite);
             scene.redo(editorState, ReplayUI::setInfoOverlayShort);
             editorState.markDirty();
         }
@@ -3417,16 +3511,16 @@ public class TimelineWindow {
     }
 
     private static void addCameraKeyframeAtCursor(Frame f) {
-        EditorCamera camera = TimelineEdits.cameraForEditing(scene, f.cursorTicks);
+        EditorCamera camera = cameraForEditing(f);
         if (camera == null) {
-            upgradeToWrite();
+            sceneStamp = upgradeToWrite(editorState, sceneStamp, sceneStampIsWrite);
             TimelineEdits.addCamera(scene, editorState, EditorCamera.Kind.FREE, f.cursorTicks);
-            camera = TimelineEdits.cameraForEditing(scene, f.cursorTicks);
+            camera = cameraForEditing(f);
         }
         if (camera == null) {
             return;
         }
-        upgradeToWrite();
+        sceneStamp = upgradeToWrite(editorState, sceneStamp, sceneStampIsWrite);
         if (Minecraft.getInstance().player != Minecraft.getInstance().getCameraEntity()) {
             // Same reasoning as adding the keyframe from the timeline: a camera keyframe while
             // spectating a player would record that player's position into a camera nobody is
@@ -3481,25 +3575,25 @@ public class TimelineWindow {
 
     private static void handleMarkInOut(Frame f) {
         if (Keybinds.MARK_IN.isPressed(false)) {
-            upgradeToWrite();
+            sceneStamp = upgradeToWrite(editorState, sceneStamp, sceneStampIsWrite);
             scene.setExportTicks(f.cursorTicks, -1, f.totalTicks);
             editorState.markDirty();
             ReplayUI.setInfoOverlayShort(I18n.get("flashback.timeline.marked_in", f.cursorTicks));
         }
         if (Keybinds.MARK_OUT.isPressed(false)) {
-            upgradeToWrite();
+            sceneStamp = upgradeToWrite(editorState, sceneStamp, sceneStampIsWrite);
             scene.setExportTicks(-1, f.cursorTicks, f.totalTicks);
             editorState.markDirty();
             ReplayUI.setInfoOverlayShort(I18n.get("flashback.timeline.marked_out", f.cursorTicks));
         }
         if (Keybinds.CLEAR_IN.isPressed(false)) {
-            upgradeToWrite();
+            sceneStamp = upgradeToWrite(editorState, sceneStamp, sceneStampIsWrite);
             scene.setExportTicks(0, -1, f.totalTicks);
             editorState.markDirty();
             ReplayUI.setInfoOverlayShort(I18n.get("flashback.timeline.marked_cleared_in"));
         }
         if (Keybinds.CLEAR_OUT.isPressed(false)) {
-            upgradeToWrite();
+            sceneStamp = upgradeToWrite(editorState, sceneStamp, sceneStampIsWrite);
             scene.setExportTicks(-1, f.totalTicks, f.totalTicks);
             editorState.markDirty();
             ReplayUI.setInfoOverlayShort(I18n.get("flashback.timeline.marked_cleared_out"));
@@ -3522,7 +3616,7 @@ public class TimelineWindow {
     // -- Operations ------------------------------------------------------------------------------
 
     private static void createKeyframe(KeyframeTrack track, int tick) {
-        upgradeToWrite();
+        sceneStamp = upgradeToWrite(editorState, sceneStamp, sceneStampIsWrite);
         KeyframeType<?> type = track.keyframeType;
         Keyframe direct = type.createDirect();
         if (direct != null) {
@@ -3581,14 +3675,14 @@ public class TimelineWindow {
         if (shot == null || shot.cutTick() < 0) {
             return;
         }
-        upgradeToWrite();
+        sceneStamp = upgradeToWrite(editorState, sceneStamp, sceneStampIsWrite);
         TimelineEdits.deleteShot(scene, editorState, shot.cutTick());
         selectedShotStart = -1;
         inspectorOpen = false;
     }
 
     private static void deleteSelection() {
-        upgradeToWrite();
+        sceneStamp = upgradeToWrite(editorState, sceneStamp, sceneStampIsWrite);
         List<EditorSceneHistoryAction> undo = new ArrayList<>();
         List<EditorSceneHistoryAction> redo = new ArrayList<>();
 
@@ -3671,7 +3765,7 @@ public class TimelineWindow {
                 }
             }
 
-            upgradeToWrite();
+            sceneStamp = upgradeToWrite(editorState, sceneStamp, sceneStampIsWrite);
             int count = 0;
             for (SavedTrack savedTrack : copied.savedTracks) {
                 count += savedTrack.applyToScene(scene, f.cursorTicks, f.totalTicks, offsets);
@@ -3693,6 +3787,48 @@ public class TimelineWindow {
         drawRegionMenu();
         drawCreateAtTickPopup(f);
         drawRenameCameraPopup();
+        drawDeleteCameraPopup();
+    }
+
+    /**
+     * Confirms deleting a camera, for the row menus that do not go through the inspector.
+     *
+     * <p>Same edit and same wording as the inspector's header button - {@link TimelineEdits#deleteCamera}
+     * removes the camera, every track it owns and every keyframe on them, and retargets the cuts that
+     * named it - so there is one deletion path and it is undoable wherever it is started from.
+     */
+    private static void drawDeleteCameraPopup() {
+        if (pendingDeleteCamera != null && openDeleteCameraPopup) {
+            ImGui.openPopup("##DeleteCamera");
+            openDeleteCameraPopup = false;
+        }
+        if (ImGuiHelper.beginPopup("##DeleteCamera")) {
+            EditorCamera camera = pendingDeleteCamera;
+            if (camera != null) {
+                ImGui.textDisabled(I18n.get("flashback.camera_inspector.delete_confirm", scene.displayNameOf(camera)));
+                if (ImGui.button(I18n.get("flashback.delete") + "##confirmDeleteCamera") || ReplayUI.consumeConfirm()) {
+                    sceneStamp = upgradeToWrite(editorState, sceneStamp, sceneStampIsWrite);
+                    TimelineEdits.deleteCamera(scene, editorState, camera);
+                    // A camera that no longer exists must not stay selected, or the inspector would go
+                    // on showing fields for something that is not in the scene.
+                    if (camera.id.equals(CameraInspectorWindow.selectedCameraId())) {
+                        CameraInspectorWindow.clear();
+                    }
+                    pendingDeleteCamera = null;
+                    ImGui.closeCurrentPopup();
+                }
+                ImGui.sameLine();
+                if (ImGui.button(I18n.get("gui.cancel") + "##cancelDeleteCamera") || ReplayUI.consumeCancel()) {
+                    pendingDeleteCamera = null;
+                    ImGui.closeCurrentPopup();
+                }
+            } else {
+                ImGui.closeCurrentPopup();
+            }
+            ImGui.endPopup();
+        } else {
+            pendingDeleteCamera = null;
+        }
     }
 
     private static void drawInspector(Frame f) {
@@ -3740,7 +3876,7 @@ public class TimelineWindow {
         ImGui.separator();
 
         keyframe.renderEditKeyframe(update -> {
-            upgradeToWrite();
+            sceneStamp = upgradeToWrite(editorState, sceneStamp, sceneStampIsWrite);
             List<EditorSceneHistoryAction> undo = new ArrayList<>();
             List<EditorSceneHistoryAction> redo = new ArrayList<>();
             int modified = 0;
@@ -3898,7 +4034,7 @@ public class TimelineWindow {
                     boolean isCurrent = camera == current;
                     if (ImGui.menuItem("\ue04b " + f.scene.displayNameOf(camera) + "##cut_" + camera.id,
                             null, isCurrent, true)) {
-                        upgradeToWrite();
+                        sceneStamp = upgradeToWrite(editorState, sceneStamp, sceneStampIsWrite);
                         if (shot != null) {
                             TimelineEdits.cutShotToCamera(scene, editorState, shot.startTick(), camera);
                         } else {
@@ -3921,19 +4057,19 @@ public class TimelineWindow {
                 boolean insideShot = f.cursorTicks > shot.startTick() && f.cursorTicks < shot.endTick();
                 if (ImGui.menuItem("\ue14e " + I18n.get("flashback.timeline.split_at_playhead") + "##splitShot",
                         null, false, insideShot)) {
-                    upgradeToWrite();
+                    sceneStamp = upgradeToWrite(editorState, sceneStamp, sceneStampIsWrite);
                     TimelineEdits.cutToCamera(scene, editorState, shot.camera(), f.cursorTicks);
                     selectedShotStart = f.cursorTicks;
                     ImGui.closeCurrentPopup();
                 }
                 if (ImGui.menuItem("\ue8f4 " + I18n.get("flashback.preview") + "##previewShot")) {
-                    editorState.previewCamera(shot.camera(), f.cursorTicks);
+                    editorState.previewCamera(shot.camera(), f.cursorTicks, sceneStamp);
                     ImGui.closeCurrentPopup();
                 }
                 ImGui.separator();
                 if (ImGui.menuItem("\ue872 " + I18n.get("flashback.timeline.remove_shot") + "##removeShot",
                         null, false, shot.cutTick() >= 0)) {
-                    upgradeToWrite();
+                    sceneStamp = upgradeToWrite(editorState, sceneStamp, sceneStampIsWrite);
                     TimelineEdits.deleteShot(scene, editorState, shot.cutTick());
                     selectedShotStart = -1;
                     ImGui.closeCurrentPopup();
@@ -4017,7 +4153,7 @@ public class TimelineWindow {
                 if (ImGui.button(I18n.get("flashback.rename")) || ReplayUI.consumeConfirm()) {
                     String name = ImGuiHelper.getString(cameraNameString).trim();
                     if (!name.isEmpty()) {
-                        upgradeToWrite();
+                        sceneStamp = upgradeToWrite(editorState, sceneStamp, sceneStampIsWrite);
                         camera.name = name;
                         for (KeyframeTrack track : scene.tracksOfCamera(camera)) {
                             track.customName = null;
@@ -4048,7 +4184,7 @@ public class TimelineWindow {
     }
 
     private static void applyToSelection(Class<?> keyframeClass, KeyframeEdit edit, String description) {
-        upgradeToWrite();
+        sceneStamp = upgradeToWrite(editorState, sceneStamp, sceneStampIsWrite);
         List<EditorSceneHistoryAction> undo = new ArrayList<>();
         List<EditorSceneHistoryAction> redo = new ArrayList<>();
         int modified = 0;
@@ -4070,7 +4206,7 @@ public class TimelineWindow {
 
     /** Points an existing cut at a different camera, as one undoable step. */
     private static void retargetCut(TimelineSelection.Ref ref, EditorCamera camera) {
-        upgradeToWrite();
+        sceneStamp = upgradeToWrite(editorState, sceneStamp, sceneStampIsWrite);
         int index = scene.trackIndexOf(ref.track());
         Keyframe existing = ref.track().keyframesByTick.get(ref.tick());
         if (index < 0 || !(existing instanceof CameraSwitchKeyframe cut)) {
@@ -4084,7 +4220,7 @@ public class TimelineWindow {
     }
 
     private static void moveSelectedTick(Frame f, TimelineSelection.Ref anchor, int newTick) {
-        upgradeToWrite();
+        sceneStamp = upgradeToWrite(editorState, sceneStamp, sceneStampIsWrite);
         int index = scene.trackIndexOf(anchor.track());
         Keyframe keyframe = anchor.track().keyframesByTick.get(anchor.tick());
         if (index < 0 || keyframe == null) {
@@ -4100,13 +4236,151 @@ public class TimelineWindow {
         SELECTION.replace(anchor.track(), clamped);
     }
 
-    /** Takes the write lock for the scene, releasing the read lock held for this frame. */
-    private static void upgradeToWrite() {
-        if (!sceneStampIsWrite) {
-            editorState.release(sceneStamp);
-            sceneStamp = editorState.acquireWrite();
-            sceneStampIsWrite = true;
+    // -- Camera object operations ----------------------------------------------------------------
+
+    /**
+     * The camera's track of a type, or null when it does not have one yet.
+     *
+     * <p>The camera inspector asks this every frame for every property, so it is a plain scan of the
+     * scene's track list rather than anything built once and cached - the list is short, and a cache
+     * would have to be invalidated by every undo.
+     */
+    @Nullable
+    public static KeyframeTrack trackOfType(EditorScene scene, EditorCamera camera, KeyframeType<?> type) {
+        for (KeyframeTrack track : scene.keyframeTracks) {
+            if (camera.id.equals(track.cameraId) && track.keyframeType == type) {
+                return track;
+            }
         }
+        return null;
+    }
+
+    /**
+     * A keyframe holding the camera's current value for one of its animatable properties.
+     *
+     * <p>The value is read from the camera - the same object the inspector's fields are bound to -
+     * so the keyframe records exactly what the user sees, including an edit made a moment earlier
+     * that has not been keyed yet. That is what makes "type a value, then press the key button"
+     * capture the typed value.
+     */
+    @Nullable
+    public static Keyframe readPropertyKeyframe(EditorCamera camera, KeyframeType<?> type) {
+        if (type == CameraPositionKeyframeType.INSTANCE) {
+            return new CameraPositionKeyframe(new Vector3d(camera.x, camera.y, camera.z));
+        }
+        if (type == CameraRotationKeyframeType.INSTANCE) {
+            return new CameraRotationKeyframe(camera.yaw, camera.pitch, camera.roll);
+        }
+        if (type == CameraFovKeyframeType.INSTANCE) {
+            return new CameraFovKeyframe(camera.fov);
+        }
+        if (type == CameraShakeKeyframeType.INSTANCE) {
+            return new CameraShakeKeyframe(camera.cameraShakeXFrequency, camera.cameraShakeXAmplitude,
+                camera.cameraShakeYFrequency, camera.cameraShakeYAmplitude, true);
+        }
+        return null;
+    }
+
+    /** Opens the timeline's rename popup for a camera. Shared with the camera inspector. */
+    public static void renameCamera(EditorScene scene, EditorCamera camera) {
+        pendingRenameCamera = camera;
+        cameraNameString = ImGuiHelper.createResizableImString(scene.displayNameOf(camera));
+        openRenameCameraPopup = true;
+    }
+
+    /**
+     * Copies a camera and everything it owns: its properties and every track with its keyframes,
+     * retargeted at the copy.
+     *
+     * <p>The track copies carry the original camera's id in {@code cameraId}, so each one is
+     * explicitly repointed at the duplicate - otherwise the copy would own nothing and the original
+     * would appear to own its rows twice. Cuts to the original are deliberately left alone: the
+     * duplicate is a new viewpoint, not a replacement.
+     */
+    @Nullable
+    public static EditorCamera duplicateCamera(EditorScene scene, EditorState state, EditorCamera camera) {
+        sceneStamp = upgradeToWrite(state, sceneStamp, sceneStampIsWrite);
+        return duplicateCameraInScene(scene, state, camera);
+    }
+
+    /**
+     * Duplicates a camera into the scene, assuming the caller already holds the write lock.
+     *
+     * <p>Split out because the camera inspector edits under its own short-lived write stamp and must
+     * not touch this window's stamp state; calling the method above from there would overwrite the
+     * timeline's stamp with the inspector's and leave the timeline mutating state unlocked.
+     */
+    public static EditorCamera duplicateCameraInScene(EditorScene scene, EditorState state, EditorCamera camera) {
+        String base = scene.displayNameOf(camera);
+        EditorCamera duplicate = new EditorCamera(I18n.get("flashback.camera_inspector.duplicate_name", base), camera.kind);
+        duplicate.id = UUID.randomUUID();
+
+        // Not EditorCamera.copy(): that keeps the original's id, which is exactly what a duplicate
+        // must not do - camera identity is what cuts and track ownership are keyed on.
+        duplicate.x = camera.x;
+        duplicate.y = camera.y;
+        duplicate.z = camera.z;
+        duplicate.yaw = camera.yaw;
+        duplicate.pitch = camera.pitch;
+        duplicate.roll = camera.roll;
+        duplicate.fov = camera.fov;
+        duplicate.overrideCameraShake = camera.overrideCameraShake;
+        duplicate.cameraShakeXFrequency = camera.cameraShakeXFrequency;
+        duplicate.cameraShakeXAmplitude = camera.cameraShakeXAmplitude;
+        duplicate.cameraShakeYFrequency = camera.cameraShakeYFrequency;
+        duplicate.cameraShakeYAmplitude = camera.cameraShakeYAmplitude;
+
+        int cameraIndex = scene.cameras.size();
+        List<KeyframeTrack> clones = new ArrayList<>();
+        List<Integer> indices = new ArrayList<>();
+        for (KeyframeTrack track : scene.tracksOfCamera(camera)) {
+            KeyframeTrack clone = track.copy();
+            clone.cameraId = duplicate.id;
+            // A track's own name was typed for the original's rows; the camera's new name is the
+            // honest label for the copy's rows.
+            clone.customName = null;
+            clones.add(clone);
+            indices.add(scene.trackIndexOf(track));
+            if (indices.get(indices.size() - 1) < 0) {
+                return null;
+            }
+        }
+
+        List<EditorSceneHistoryAction> undo = new ArrayList<>();
+        List<EditorSceneHistoryAction> redo = new ArrayList<>();
+        // Redo restores the camera before its rows, so the rows have an owner from the first action.
+        redo.add(new EditorSceneHistoryAction.AddCamera(duplicate, cameraIndex, List.of()));
+        for (int i = 0; i < clones.size(); i++) {
+            redo.add(new EditorSceneHistoryAction.RestoreTrack(clones.get(i), indices.get(i)));
+        }
+        // Undo is exactly that backwards: the rows come out first, from the highest index down so
+        // each removal leaves the ones below it where they were, and the camera goes last.
+        for (int i = clones.size() - 1; i >= 0; i--) {
+            undo.add(new EditorSceneHistoryAction.RemoveTrack(clones.get(i).keyframeType, indices.get(i)));
+        }
+        undo.add(new EditorSceneHistoryAction.RemoveCamera(duplicate));
+
+        TimelineEdits.push(scene, state, undo, redo,
+            I18n.get("flashback.camera_inspector.duplicated", base));
+        return duplicate;
+    }
+
+    /**
+     * The camera a keyframe shortcut should write to: the selected object if there is one, and
+     * otherwise whichever camera is being output at the playhead.
+     *
+     * <p>Following the selection first keeps the keyboard shortcut consistent with the inspector -
+     * pressing "add camera keyframe" while a camera is selected should key that camera, not whichever
+     * one happens to be live at the playhead.
+     */
+    @Nullable
+    private static EditorCamera cameraForEditing(Frame f) {
+        UUID selected = CameraInspectorWindow.selectedCameraId();
+        EditorCamera camera = selected == null ? null : scene.cameraById(selected);
+        if (camera != null) {
+            return camera;
+        }
+        return TimelineEdits.cameraForEditing(scene, f.cursorTicks);
     }
 
     private static String ticksToTimestamp(int ticks) {

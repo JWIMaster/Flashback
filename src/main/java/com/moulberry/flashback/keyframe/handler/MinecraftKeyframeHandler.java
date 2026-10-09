@@ -1,6 +1,7 @@
 package com.moulberry.flashback.keyframe.handler;
 
 import com.moulberry.flashback.Flashback;
+import com.moulberry.flashback.combo_options.WeatherOverride;
 import com.moulberry.flashback.keyframe.change.*;
 import com.moulberry.flashback.playback.ReplayServer;
 import com.moulberry.flashback.state.EditorState;
@@ -63,9 +64,12 @@ public class MinecraftKeyframeHandler implements KeyframeHandler {
     }
 
     private static final Set<Class<? extends KeyframeChange>> supportedChanges = Set.of(
-            KeyframeChangeCameraPosition.class, KeyframeChangeCameraPositionOrbit.class, KeyframeChangeTrackEntity.class,
-            KeyframeChangeFov.class, KeyframeChangeTimeOfDay.class, KeyframeChangeCameraShake.class,
-            KeyframeChangeCameraSwitch.class, KeyframeChangeSpectate.class
+            KeyframeChangeCameraPosition.class, KeyframeChangeCameraPositionOnly.class,
+            KeyframeChangeCameraRotationOnly.class, KeyframeChangeCameraPositionOrbit.class,
+            KeyframeChangeTrackEntity.class,
+            KeyframeChangeFov.class, KeyframeChangeCameraFov.class, KeyframeChangeTimeOfDay.class,
+            KeyframeChangeCameraShake.class,
+            KeyframeChangeCameraSwitch.class, KeyframeChangeSpectate.class, KeyframeChangeWeather.class
     );
 
     @Override
@@ -99,26 +103,82 @@ public class MinecraftKeyframeHandler implements KeyframeHandler {
             player.snapTo(position.x, position.y, position.z, (float) yaw, (float) pitch);
             player.getInterpolation().cancel();
 
-            EditorState editorState = EditorStateManager.getCurrent();
-            if (editorState != null) {
-                if (roll > -0.01 && roll < 0.01) {
-                    editorState.replayVisuals.overrideRoll = false;
-                    editorState.replayVisuals.overrideRollAmount = 0.0f;
-                } else {
-                    editorState.replayVisuals.overrideRoll = true;
-                    editorState.replayVisuals.overrideRollAmount = (float) roll;
-                }
-            }
+            this.applyRollOverride(roll);
 
             player.setDeltaMovement(Vec3.ZERO);
         }
+    }
+
+    /**
+     * Moves the player to a position and leaves where it is looking alone.
+     *
+     * <p>A camera's position and rotation are separate tracks now, and both are applied on the same
+     * frame. This is the same prelude as {@link #applyCameraPosition} - a positioned camera is not
+     * spectating, its interpolation is cancelled and its movement is zeroed - but the yaw and pitch
+     * it snaps to are the player's current ones, and the roll override is deliberately not touched:
+     * a position keyframe must not be able to change the camera's roll, because roll belongs to the
+     * rotation track the user may be animating in the same frame.
+     */
+    @Override
+    public void applyCameraPositionOnly(Vector3d position) {
+        LocalPlayer player = this.minecraft.player;
+        if (player != null) {
+            this.stopSpectating();
+
+            player.snapTo(position.x, position.y, position.z, player.getYRot(), player.getXRot());
+            player.getInterpolation().cancel();
+
+            player.setDeltaMovement(Vec3.ZERO);
+        }
+    }
+
+    /**
+     * Turns the player to these angles where it already is.
+     *
+     * <p>The counterpart to {@link #applyCameraPositionOnly}: the x/y/z snapped to are the player's
+     * current ones, so the rotation track cannot move the camera and a position track applied in the
+     * same frame survives whichever order the two are evaluated in. Roll is part of the rotation, so
+     * it is written exactly as {@link #applyCameraPosition} writes it.
+     */
+    @Override
+    public void applyCameraRotationOnly(double yaw, double pitch, double roll) {
+        LocalPlayer player = this.minecraft.player;
+        if (player != null) {
+            this.stopSpectating();
+
+            player.snapTo(player.getX(), player.getY(), player.getZ(), (float) yaw, (float) pitch);
+            player.getInterpolation().cancel();
+
+            this.applyRollOverride(roll);
+
+            player.setDeltaMovement(Vec3.ZERO);
+        }
+    }
+
+    /**
+     * The roll the editor renders with, as an override because the game has no roll angle.
+     *
+     * <p>A roll of essentially zero clears the override rather than setting it to zero, which is the
+     * state the rest of the editor treats as "level".
+     */
+    private void applyRollOverride(double roll) {
+        EditorState editorState = EditorStateManager.getCurrent();
+        if (editorState != null) {
+            editorState.replayVisuals.cameraVisuals().setRoll(roll);
+        }
+    }
+
+    @Override
+    public void beginCameraFrame() {
+        EditorState editorState = EditorStateManager.getCurrent();
+        if (editorState != null) editorState.replayVisuals.beginCameraFrame();
     }
 
     @Override
     public void applyFov(float fov) {
         EditorState editorState = EditorStateManager.getCurrent();
         if (editorState != null) {
-            editorState.replayVisuals.setFov(fov);
+            editorState.replayVisuals.cameraVisuals().setFov(fov);
         }
     }
 
@@ -130,11 +190,28 @@ public class MinecraftKeyframeHandler implements KeyframeHandler {
         }
     }
 
+    /**
+     * Sets the weather the client draws.
+     *
+     * <p>The override is read straight off the editor state by the level and precipitation mixins, so
+     * writing it here is what makes a weather keyframe visible on this frame. It is applied to the
+     * client only: the replay server's own weather comes from the recorded packets, and this is a
+     * look applied on top of it. Like {@link #applyTimeOfDay(int)} this is a view setting rather than
+     * an edit, so it does not mark the project dirty.
+     */
+    @Override
+    public void applyWeather(WeatherOverride mode) {
+        EditorState editorState = EditorStateManager.getCurrent();
+        if (editorState != null) {
+            editorState.replayVisuals.overrideWeatherMode = mode;
+        }
+    }
+
     @Override
     public void applyCameraShake(float frequencyX, float amplitudeX, float frequencyY, float amplitudeY) {
         EditorState editorState = EditorStateManager.getCurrent();
         if (editorState != null) {
-            editorState.replayVisuals.setCameraShake(frequencyX, amplitudeX, frequencyY, amplitudeY);
+            editorState.replayVisuals.cameraVisuals().setCameraShake(frequencyX, amplitudeX, frequencyY, amplitudeY);
         }
     }
 

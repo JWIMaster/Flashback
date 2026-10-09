@@ -9,6 +9,7 @@ import imgui.moulberry90.flag.ImGuiComboFlags;
 import imgui.moulberry90.flag.ImGuiHoveredFlags;
 import imgui.moulberry90.flag.ImGuiKey;
 import imgui.moulberry90.flag.ImGuiMouseButton;
+import imgui.moulberry90.flag.ImGuiSliderFlags;
 import imgui.moulberry90.flag.ImGuiWindowFlags;
 import imgui.moulberry90.type.ImBoolean;
 import imgui.moulberry90.type.ImFloat;
@@ -470,6 +471,47 @@ public class ImGuiHelper {
         ImGui.endGroup();
 
         return valueChanged;
+    }
+
+    /**
+     * A labelled value that can be dragged to change it, or clicked to type an exact one.
+     *
+     * <p>Dragging is the gesture: the field must be dragged by {@code speed} units per pixel, on
+     * top of whatever the widget itself provides. Typing an exact value is imgui's own behaviour for
+     * a drag widget (Ctrl/Cmd-click or double-click turns it into a text field) and is deliberately
+     * left alone - the flag below only stops the value wrapping.
+     *
+     * <p>Shift fine adjustment is handled by imgui itself; the supplied speed is not rescaled.
+     */
+    public static boolean dragFloat(String label, float[] value, float speed, String format) {
+        // Unbounded fields still need a real lower bound: Float.MIN_VALUE is the smallest POSITIVE
+        // float, so passing it to a clamping widget turns every value below it into about zero.
+        return dragFloat(label, value, speed, -Float.MAX_VALUE, Float.MAX_VALUE, format);
+    }
+
+    /**
+     * The same, with a range the value is held inside.
+     *
+     * <p>The bounds are not only tidiness. The flag below clamps, so a lower bound of
+     * {@code Float.MIN_VALUE} - the smallest positive float, not the most negative - silently turns
+     * every value below it into about zero. That is how a sentinel like {@code -1} becomes a
+     * degenerate field, so a property whose real range is known is given one.
+     */
+    public static boolean dragFloat(String label, float[] value, float speed, float min, float max, String format) {
+        ImGui.setNextItemWidth(ImGui.calcItemWidth());
+        // EndGroup forwards the scalar's active, edited and deactivated item state to callers.
+        ImGui.beginGroup();
+        ImGui.pushID(label);
+        boolean changed = ImGui.dragFloat("##value", value, speed, min, max,
+            format, ImGuiSliderFlags.AlwaysClamp);
+        String renderedText = label.split("##")[0];
+        if (!renderedText.isEmpty()) {
+            ImGui.sameLine(0, ImGui.getStyle().getItemInnerSpacingX());
+            ImGui.textUnformatted(renderedText);
+        }
+        ImGui.endGroup();
+        ImGui.popID();
+        return changed;
     }
 
     public static boolean radio(String label, int[] currentItem, String[] values) {

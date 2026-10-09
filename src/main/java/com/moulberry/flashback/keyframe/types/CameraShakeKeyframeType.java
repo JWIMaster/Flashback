@@ -57,12 +57,12 @@ public class CameraShakeKeyframeType implements KeyframeType<CameraShakeKeyframe
         float[] cameraShakeAmplitudeYKeyframeInput = new float[]{0.0f};
 
         EditorState editorState = EditorStateManager.getCurrent();
-        if (editorState != null && editorState.replayVisuals.overrideCameraShake) {
-            cameraShakeSplitXYKeyframeInput[0] = editorState.replayVisuals.cameraShakeSplitParams;
-            cameraShakeFrequencyXKeyframeInput[0] = editorState.replayVisuals.cameraShakeXFrequency;
-            cameraShakeAmplitudeXKeyframeInput[0] = editorState.replayVisuals.cameraShakeXAmplitude;
-            cameraShakeFrequencyYKeyframeInput[0] = editorState.replayVisuals.cameraShakeYFrequency;
-            cameraShakeAmplitudeYKeyframeInput[0] = editorState.replayVisuals.cameraShakeYAmplitude;
+        if (editorState != null && editorState.replayVisuals.cameraVisuals().overrideCameraShake) {
+            cameraShakeSplitXYKeyframeInput[0] = editorState.replayVisuals.cameraVisuals().cameraShakeSplitParams;
+            cameraShakeFrequencyXKeyframeInput[0] = editorState.replayVisuals.cameraVisuals().cameraShakeXFrequency;
+            cameraShakeAmplitudeXKeyframeInput[0] = editorState.replayVisuals.cameraVisuals().cameraShakeXAmplitude;
+            cameraShakeFrequencyYKeyframeInput[0] = editorState.replayVisuals.cameraVisuals().cameraShakeYFrequency;
+            cameraShakeAmplitudeYKeyframeInput[0] = editorState.replayVisuals.cameraVisuals().cameraShakeYAmplitude;
         }
 
         return () -> {

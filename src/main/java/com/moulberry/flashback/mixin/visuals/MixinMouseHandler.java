@@ -23,8 +23,8 @@ public class MixinMouseHandler {
     public OptionInstance<Double> turnPlayer_sensitivity(Options instance, Operation<OptionInstance<Double>> original) {
         OptionInstance<Double> sensitivity = original.call(instance);
         EditorState editorState = EditorStateManager.getCurrent();
-        if (editorState != null && editorState.replayVisuals.overrideFov) {
-            float newFov = editorState.replayVisuals.overrideFovAmount;
+        if (editorState != null && editorState.replayVisuals.cameraVisuals().overrideFov) {
+            float newFov = editorState.replayVisuals.cameraVisuals().overrideFovAmount;
             if (newFov > 20.0) {
                 return original.call(instance);
             }

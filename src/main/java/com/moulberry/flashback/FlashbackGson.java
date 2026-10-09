@@ -32,6 +32,9 @@ public class FlashbackGson {
             .registerTypeHierarchyAdapter(KeyframeType.class, new KeyframeRegistry.TypeAdapter())
 
             .registerTypeAdapter(CameraKeyframe.class, new CameraKeyframe.TypeAdapter())
+            .registerTypeAdapter(CameraPositionKeyframe.class, new CameraPositionKeyframe.TypeAdapter())
+            .registerTypeAdapter(CameraRotationKeyframe.class, new CameraRotationKeyframe.TypeAdapter())
+            .registerTypeAdapter(CameraFovKeyframe.class, new CameraFovKeyframe.TypeAdapter())
             .registerTypeAdapter(CameraOrbitKeyframe.class, new CameraOrbitKeyframe.TypeAdapter())
             .registerTypeAdapter(TrackEntityKeyframe.class, new TrackEntityKeyframe.TypeAdapter())
             .registerTypeAdapter(CameraSwitchKeyframe.class, new CameraSwitchKeyframe.TypeAdapter())
@@ -41,6 +44,7 @@ public class FlashbackGson {
             .registerTypeAdapter(TickrateKeyframe.class, new TickrateKeyframe.TypeAdapter())
             .registerTypeAdapter(TimelapseKeyframe.class, new TimelapseKeyframe.TypeAdapter())
             .registerTypeAdapter(TimeOfDayKeyframe.class, new TimeOfDayKeyframe.TypeAdapter())
+            .registerTypeAdapter(WeatherKeyframe.class, new WeatherKeyframe.TypeAdapter())
             .registerTypeAdapter(FreezeKeyframe.class, new FreezeKeyframe.TypeAdapter())
             .registerTypeAdapter(BlockOverrideKeyframe.class, new BlockOverrideKeyframe.TypeAdapter())
             .registerTypeAdapter(AudioKeyframe.class, new AudioKeyframe.TypeAdapter())

@@ -47,6 +47,8 @@ public class ContainerGuiCheck {
         freshWatchedPlayersStartWithASettledHand(root);
         handYawStaysOnSameTurnAsCamera(root);
         stopSpectatingHasAKey(root);
+        theCameraInspectorKeepsItsLocksToItself();
+        aDragFieldNeverUsesFloatMinValueAsItsLowerBound();
         if (failures > 0) {
             System.out.println("FAILURES: " + failures);
             System.exit(1);
@@ -504,6 +506,98 @@ public class ContainerGuiCheck {
             }
             return null;
         }
+    }
+
+    /**
+     * The camera inspector must not reach into another window's lock bookkeeping.
+     *
+     * <p>It used to call {@code TimelineWindow.upgradeToWrite}, which writes THAT window's static
+     * stamp. The inspector's stamp then became the timeline's, so the timeline believed it already
+     * held a write stamp, mutated the scene without the lock, and released a stamp that had already
+     * been released - StampedLock throws IllegalMonitorStateException out of the render loop and the
+     * UI is left half-drawn. This is asserted against the source because it is a whole-file rule:
+     * a single new call anywhere in the window would reintroduce it.
+     */
+    private static void theCameraInspectorKeepsItsLocksToItself() throws Exception {
+        String source = Files.readString(Path.of("src/main/java/com/moulberry/flashback/editor/ui/windows/CameraInspectorWindow.java"));
+
+        check("the camera inspector never takes the timeline's write helper",
+            !source.contains("upgradeToWrite"));
+        check("the camera inspector never touches the timeline's stamp state",
+            !source.contains("sceneStamp"));
+
+        // It copies what a frame needs under a short read stamp, then draws and mutates without it.
+        check("the camera inspector acquires the read stamp exactly once, for the snapshot",
+            countOccurrences(source, "acquireRead()") == 1);
+        // One read stamp for the snapshot, and the two write wrappers (one void, one that returns the
+        // new camera for a duplicate). Any more than that means a mutation path grew its own locking.
+        check("the camera inspector only acquires write stamps in its mutation wrappers",
+            countOccurrences(source, "acquireWrite()") == 2);
+        check("every stamp acquired is released, and only here",
+            countOccurrences(source, "release(stamp)") == 3
+                && countOccurrences(source, ".release(") == 3);
+        check("the write stamp is never acquired while a read stamp is held (StampedLock is not reentrant)",
+            noWriteWhileReading(source));
+    }
+
+    /**
+     * Walks the source in order and fails if a write stamp is ever taken while a read stamp is held.
+     *
+     * <p>Each acquisition or release is one statement on its own line in that file, which is what makes
+     * a line-order walk a fair check here rather than a real parser.
+     */
+    private static boolean noWriteWhileReading(String source) {
+        int reads = 0;
+        for (String line : source.split("\\R")) {
+            if (line.contains("acquireRead()")) {
+                reads += 1;
+            }
+            if (line.contains("acquireWrite()") && reads > 0) {
+                return false;
+            }
+            if (line.contains("release(stamp)") && reads > 0) {
+                reads -= 1;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * A clamped drag field must never be given {@link Float#MIN_VALUE} as its lower bound.
+     *
+     * <p>{@code Float.MIN_VALUE} is the smallest POSITIVE float, so a clamping widget turns every
+     * value below it into about zero. The camera inspector's fov field starts at the {@code -1}
+     * "not overridden" sentinel, and that combination saved a project with an override of about zero
+     * degrees - a degenerate projection that renders nothing. It is asserted against the source
+     * because it is a one-constant mistake that silently breaks rendering rather than failing.
+     */
+    private static void aDragFieldNeverUsesFloatMinValueAsItsLowerBound() throws Exception {
+        String helper = Files.readString(
+            Path.of("src/main/java/com/moulberry/flashback/editor/ui/ImGuiHelper.java"));
+        check("no drag field clamps to the smallest positive float",
+            !helper.contains("Float.MIN_VALUE, Float.MAX_VALUE"));
+        check("the unbounded drag field uses a real negative lower bound",
+            helper.contains("-Float.MAX_VALUE"));
+        check("the bounded drag field takes its range as arguments",
+            helper.contains("float min, float max, String format)"));
+
+        String inspector = Files.readString(
+            Path.of("src/main/java/com/moulberry/flashback/editor/ui/windows/CameraInspectorWindow.java"));
+        check("the camera inspector's fov field is held in a real range",
+            inspector.contains("CAMERA_FOV_MIN") && inspector.contains("CAMERA_FOV_MAX"));
+        check("the camera inspector resolves the fov sentinel before dragging it",
+            inspector.contains("fov[0] < 0 && drag == null")
+                && inspector.contains("defaultOverrideFov"));
+    }
+
+    private static int countOccurrences(String source, String needle) {
+        int count = 0;
+        int at = source.indexOf(needle);
+        while (at >= 0) {
+            count += 1;
+            at = source.indexOf(needle, at + needle.length());
+        }
+        return count;
     }
 
     private static void check(String what, boolean condition) {

@@ -120,43 +120,7 @@ public class VisualsWindow {
                 editorState.markDirty();
             }
 
-            ImGuiHelper.separatorWithText(I18n.get("flashback.visuals.overrides"));
-
-            // Fog distance
-            if (ImGui.checkbox(I18n.get("flashback.visuals.overrides.override_fog"), visuals.overrideFog)) {
-                visuals.overrideFog = !visuals.overrideFog;
-                editorState.markDirty();
-            }
-            if (visuals.overrideFog) {
-                floatBuffer[0] = visuals.overrideFogStart;
-                if (ImGui.sliderFloat(I18n.get("flashback.fog_start"), floatBuffer, 0.0f, 512.0f)) {
-                    visuals.overrideFogStart = floatBuffer[0];
-                    editorState.markDirty();
-                }
-
-                floatBuffer[0] = visuals.overrideFogEnd;
-                if (ImGui.sliderFloat(I18n.get("flashback.fog_end"), floatBuffer, 0.0f, 512.0f)) {
-                    visuals.overrideFogEnd = floatBuffer[0];
-                    editorState.markDirty();
-                }
-            }
-
-            if (ImGui.checkbox(I18n.get("flashback.visuals.overrides.override_fog_colour"), visuals.overrideFogColour)) {
-                visuals.overrideFogColour = !visuals.overrideFogColour;
-                editorState.markDirty();
-            }
-            if (visuals.overrideFogColour) {
-                if (ImGui.colorButton(I18n.get("flashback.visuals.overrides.fog_colour"), visuals.fogColour)) {
-                    ImGui.openPopup("##EditFogColour");
-                }
-                ImGui.sameLine();
-                ImGui.textUnformatted(I18n.get("flashback.visuals.overrides.fog_colour"));
-
-                if (ImGuiHelper.beginPopup("##EditFogColour")) {
-                    ImGui.colorPicker3(I18n.get("flashback.visuals.overrides.fog_colour"), visuals.fogColour);
-                    ImGui.endPopup();
-                }
-            }
+            ImGuiHelper.separatorWithText(I18n.get("flashback.camera"));
 
             // FOV
             if (ImGui.checkbox(I18n.get("flashback.visuals.overrides.override_fov"), visuals.overrideFov)) {
@@ -179,34 +143,6 @@ public class VisualsWindow {
                     visuals.setFov(floatBuffer[0]);
                     editorState.markDirty();
                 }
-            }
-
-            // Time
-            if (ImGui.checkbox(I18n.get("flashback.visuals.overrides.override_time"), visuals.overrideTimeOfDay >= 0)) {
-                if (visuals.overrideTimeOfDay >= 0) {
-                    visuals.overrideTimeOfDay = -1;
-                } else {
-                    visuals.overrideTimeOfDay = (int)(Minecraft.getInstance().level.getDefaultClockTime() % 24000);
-                }
-                editorState.markDirty();
-            }
-            if (visuals.overrideTimeOfDay >= 0) {
-                ImGui.sameLine();
-                if (ImGui.smallButton("+")) {
-                    addKeyframe(editorState, replayServer, new TimeOfDayKeyframe((int) visuals.overrideTimeOfDay));
-                }
-                ImGuiHelper.tooltip(I18n.get("flashback.add_time_keyframe"));
-
-                intBuffer[0] = (int) visuals.overrideTimeOfDay;
-                if (ImGui.sliderInt(I18n.get("flashback.time"), intBuffer, 0, 24000)) {
-                    visuals.overrideTimeOfDay = intBuffer[0];
-                    editorState.markDirty();
-                }
-            }
-
-            // Night vision
-            if (ImGui.checkbox(I18n.get("flashback.visuals.overrides.night_vision"), visuals.overrideNightVision)) {
-                visuals.overrideNightVision = !visuals.overrideNightVision;
             }
 
             // Camera shake
@@ -293,9 +229,11 @@ public class VisualsWindow {
                 }
             }
 
-            visuals.overrideWeatherMode = ImGuiHelper.enumCombo(I18n.get("flashback.weather"), visuals.overrideWeatherMode);
-
-            ImGuiHelper.separatorWithText(I18n.get("flashback.other"));
+            // Camera path and framing guides
+            if (ImGui.checkbox(I18n.get("flashback.camera_path"), visuals.cameraPath)) {
+                visuals.cameraPath = !visuals.cameraPath;
+                editorState.markDirty();
+            }
 
             if (ImGui.checkbox(I18n.get("flashback.rule_of_thirds_guide"), visuals.ruleOfThirdsGuide)) {
                 visuals.ruleOfThirdsGuide = !visuals.ruleOfThirdsGuide;
@@ -307,6 +245,78 @@ public class VisualsWindow {
                 editorState.markDirty();
             }
 
+            ImGuiHelper.separatorWithText(I18n.get("flashback.visuals.environment"));
+
+            // Fog distance
+            if (ImGui.checkbox(I18n.get("flashback.visuals.overrides.override_fog"), visuals.overrideFog)) {
+                visuals.overrideFog = !visuals.overrideFog;
+                editorState.markDirty();
+            }
+            if (visuals.overrideFog) {
+                floatBuffer[0] = visuals.overrideFogStart;
+                if (ImGui.sliderFloat(I18n.get("flashback.fog_start"), floatBuffer, 0.0f, 512.0f)) {
+                    visuals.overrideFogStart = floatBuffer[0];
+                    editorState.markDirty();
+                }
+
+                floatBuffer[0] = visuals.overrideFogEnd;
+                if (ImGui.sliderFloat(I18n.get("flashback.fog_end"), floatBuffer, 0.0f, 512.0f)) {
+                    visuals.overrideFogEnd = floatBuffer[0];
+                    editorState.markDirty();
+                }
+            }
+
+            // Fog colour
+            if (ImGui.checkbox(I18n.get("flashback.visuals.overrides.override_fog_colour"), visuals.overrideFogColour)) {
+                visuals.overrideFogColour = !visuals.overrideFogColour;
+                editorState.markDirty();
+            }
+            if (visuals.overrideFogColour) {
+                if (ImGui.colorButton(I18n.get("flashback.visuals.overrides.fog_colour"), visuals.fogColour)) {
+                    ImGui.openPopup("##EditFogColour");
+                }
+                ImGui.sameLine();
+                ImGui.textUnformatted(I18n.get("flashback.visuals.overrides.fog_colour"));
+
+                if (ImGuiHelper.beginPopup("##EditFogColour")) {
+                    ImGui.colorPicker3(I18n.get("flashback.visuals.overrides.fog_colour"), visuals.fogColour);
+                    ImGui.endPopup();
+                }
+            }
+
+            // Time
+            if (ImGui.checkbox(I18n.get("flashback.visuals.overrides.override_time"), visuals.overrideTimeOfDay >= 0)) {
+                if (visuals.overrideTimeOfDay >= 0) {
+                    visuals.overrideTimeOfDay = -1;
+                } else {
+                    visuals.overrideTimeOfDay = (int)(Minecraft.getInstance().level.getDefaultClockTime() % 24000);
+                }
+                editorState.markDirty();
+            }
+            if (visuals.overrideTimeOfDay >= 0) {
+                ImGui.sameLine();
+                if (ImGui.smallButton("+")) {
+                    addKeyframe(editorState, replayServer, new TimeOfDayKeyframe((int) visuals.overrideTimeOfDay));
+                }
+                ImGuiHelper.tooltip(I18n.get("flashback.add_time_keyframe"));
+
+                intBuffer[0] = (int) visuals.overrideTimeOfDay;
+                if (ImGui.sliderInt(I18n.get("flashback.time"), intBuffer, 0, 24000)) {
+                    visuals.overrideTimeOfDay = intBuffer[0];
+                    editorState.markDirty();
+                }
+            }
+
+            // Weather
+            visuals.overrideWeatherMode = ImGuiHelper.enumCombo(I18n.get("flashback.weather"), visuals.overrideWeatherMode);
+
+            // Night vision
+            if (ImGui.checkbox(I18n.get("flashback.visuals.overrides.night_vision"), visuals.overrideNightVision)) {
+                visuals.overrideNightVision = !visuals.overrideNightVision;
+            }
+
+            ImGuiHelper.separatorWithText(I18n.get("flashback.other"));
+
             if (replayServer.hasRtcData()) {
                 var config = Flashback.getConfig();
                 if (ImGui.checkbox(I18n.get("flashback.overlay.rtc_overlay"), config.overlay.rtcOverlay)) {
@@ -314,11 +324,6 @@ public class VisualsWindow {
                     config.delayedSaveToDefaultFolder();
                 }
                 ImGui.setItemTooltip(I18n.get("flashback.overlay.rtc_overlay.description"));
-            }
-
-            if (ImGui.checkbox(I18n.get("flashback.camera_path"), visuals.cameraPath)) {
-                visuals.cameraPath = !visuals.cameraPath;
-                editorState.markDirty();
             }
 
             visuals.sizing = ImGuiHelper.enumCombo(I18n.get("flashback.sizing"), visuals.sizing);

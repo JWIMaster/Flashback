@@ -25,7 +25,7 @@ public class CameraRotation {
             return quaternionf;
         }
 
-        ReplayVisuals visuals = editorState.replayVisuals;
+        ReplayVisuals visuals = editorState.replayVisuals.cameraVisuals();
         quaternionf = new Quaternionf(quaternionf);
 
         if (visuals.overrideRoll) {

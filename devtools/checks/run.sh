@@ -60,6 +60,8 @@ run_check() {
 for suite in \
     com.moulberry.flashback.state.MigrationTest \
     com.moulberry.flashback.state.EvaluationTest \
+    com.moulberry.flashback.state.CameraObjectTest \
+    com.moulberry.flashback.state.CameraInspectorRegressionTest \
     com.moulberry.flashback.state.CutTest \
     com.moulberry.flashback.state.LoadCompatTest \
     com.moulberry.flashback.editor.ui.timeline.LayoutTest \
@@ -71,7 +73,8 @@ for suite in \
 done
 
 run_check "ImGuiPairingCheck" com.moulberry.flashback.ImGuiPairingCheck \
-    src/main/java/com/moulberry/flashback/editor/ui/windows/TimelineWindow.java
+    src/main/java/com/moulberry/flashback/editor/ui/windows/TimelineWindow.java \
+    src/main/java/com/moulberry/flashback/editor/ui/windows/CameraInspectorWindow.java
 run_check "ContainerGuiCheck" com.moulberry.flashback.gui.ContainerGuiCheck src/main/java
 
 if ! bash devtools/checks/run-replay-inventory.sh; then

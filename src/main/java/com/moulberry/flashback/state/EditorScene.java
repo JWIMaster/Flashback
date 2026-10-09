@@ -2,7 +2,10 @@ package com.moulberry.flashback.state;
 
 import com.moulberry.flashback.keyframe.Keyframe;
 import com.moulberry.flashback.keyframe.KeyframeType;
+import com.moulberry.flashback.keyframe.types.CameraFovKeyframeType;
 import com.moulberry.flashback.keyframe.types.CameraKeyframeType;
+import com.moulberry.flashback.keyframe.types.CameraPositionKeyframeType;
+import com.moulberry.flashback.keyframe.types.CameraRotationKeyframeType;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
@@ -538,6 +541,9 @@ public class EditorScene {
      */
     public static boolean isCameraScoped(KeyframeType<?> type) {
         return type == CameraKeyframeType.INSTANCE
+            || type == CameraPositionKeyframeType.INSTANCE
+            || type == CameraRotationKeyframeType.INSTANCE
+            || type == CameraFovKeyframeType.INSTANCE
             || type == CameraOrbitKeyframeType.INSTANCE
             || type == TrackEntityKeyframeType.INSTANCE
             || type == SpectateKeyframeType.INSTANCE;

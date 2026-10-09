@@ -34,8 +34,8 @@ public class CameraKeyframe extends Keyframe {
 
     private static float getDefaultRoll() {
         EditorState editorState = EditorStateManager.getCurrent();
-        if (editorState != null && editorState.replayVisuals.overrideRoll) {
-            return editorState.replayVisuals.overrideRollAmount;
+        if (editorState != null && editorState.replayVisuals.cameraVisuals().overrideRoll) {
+            return editorState.replayVisuals.cameraVisuals().overrideRollAmount;
         } else {
             return 0.0f;
         }

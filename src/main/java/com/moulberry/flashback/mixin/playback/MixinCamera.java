@@ -127,8 +127,8 @@ public abstract class MixinCamera {
             }
 
             EditorState editorState = EditorStateManager.getCurrent();
-            if (editorState != null && editorState.replayVisuals.overrideFov) {
-                return editorState.replayVisuals.overrideFovAmount;
+            if (editorState != null && editorState.replayVisuals.cameraVisuals().overrideFov) {
+                return com.moulberry.flashback.visuals.ReplayVisuals.saneFov(editorState.replayVisuals.cameraVisuals().overrideFovAmount);
             } else {
                 return this.minecraft.options.fov().get().intValue();
             }

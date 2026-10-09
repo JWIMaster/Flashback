@@ -336,12 +336,22 @@ public class CameraPath {
     }
 
     private static boolean isChangeCameraKeyframeType(Class<? extends KeyframeChange> clazz) {
-        return clazz == KeyframeChangeCameraPosition.class || clazz == KeyframeChangeCameraPositionOrbit.class;
+        // The granular camera changes are camera changes too: a position-only or rotation-only track
+        // has to contribute to the drawn path exactly as a whole camera keyframe does.
+        return clazz == KeyframeChangeCameraPosition.class || clazz == KeyframeChangeCameraPositionOrbit.class
+            || clazz == KeyframeChangeCameraPositionOnly.class || clazz == KeyframeChangeCameraRotationOnly.class;
     }
 
     private static class CapturingKeyframeHandler implements KeyframeHandler {
         private Vector3d position;
-        private Quaterniond angle;
+        /**
+         * Identity until something turns the camera.
+         *
+         * <p>A whole-camera keyframe and an orbit set position and angle together, so this used to be
+         * safe to leave null. A granular position track sets only the position, and the frustum still
+         * has to be drawn, so an unturned camera reads as no rotation rather than as nothing at all.
+         */
+        private Quaterniond angle = new Quaterniond();
 
         @Override
         public boolean supportsKeyframeChange(Class<? extends KeyframeChange> clazz) {
@@ -358,6 +368,18 @@ public class CameraPath {
             this.position = position;
             this.angle = new Quaterniond().rotationYXZ((float) -Math.toRadians(yaw), (float) Math.toRadians(pitch), (float) -Math.toRadians(roll));
         }
+
+        @Override
+        public void applyCameraPositionOnly(Vector3d position) {
+            // Only the position is captured; the rotation is whatever the rotation track (applied in
+            // the same frame) left here, which is the same merge the live camera performs.
+            this.position = position;
+        }
+
+        @Override
+        public void applyCameraRotationOnly(double yaw, double pitch, double roll) {
+            this.angle = new Quaterniond().rotationYXZ((float) -Math.toRadians(yaw), (float) Math.toRadians(pitch), (float) -Math.toRadians(roll));
+        }
     }
 
     private static class FovCapturingKeyframeHandler implements KeyframeHandler {
@@ -365,7 +387,8 @@ public class CameraPath {
 
         @Override
         public boolean supportsKeyframeChange(Class<? extends KeyframeChange> clazz) {
-            return clazz == KeyframeChangeFov.class;
+            // A camera's own FOV lane changes the same single FOV, so the drawn FOV path must read it.
+            return clazz == KeyframeChangeFov.class || clazz == KeyframeChangeCameraFov.class;
         }
 
         @Override

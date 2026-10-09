@@ -25,11 +25,11 @@ public class MixinOptions implements OptionsExt {
     @Inject(method = "fov", at = @At("RETURN"), cancellable = true)
     public void fov(CallbackInfoReturnable<OptionInstance<Integer>> cir) {
         EditorState editorState = EditorStateManager.getCurrent();
-        if (editorState != null && editorState.replayVisuals.overrideFov) {
-            if (this.cachedFovOptionInstance == null || this.cachedFovOptionInstance.get() != Math.round(editorState.replayVisuals.overrideFovAmount)) {
+        if (editorState != null && editorState.replayVisuals.cameraVisuals().overrideFov) {
+            if (this.cachedFovOptionInstance == null || this.cachedFovOptionInstance.get() != Math.round(editorState.replayVisuals.cameraVisuals().overrideFovAmount)) {
                 OptionInstance<Integer> delegate = cir.getReturnValue();
                 this.cachedFovOptionInstance = new OptionInstance<>("options.fov", OptionInstance.noTooltip(), Options::genericValueLabel,
-                    delegate.values(), delegate.codec(), Math.round(editorState.replayVisuals.overrideFovAmount), value -> {
+                    delegate.values(), delegate.codec(), Math.round(editorState.replayVisuals.cameraVisuals().overrideFovAmount), value -> {
                     editorState.replayVisuals.overrideFov = false;
                     delegate.set(value);
                 });

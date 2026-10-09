@@ -9,11 +9,25 @@ import com.moulberry.flashback.configuration.FlashbackConfigV1;
 import com.moulberry.flashback.keyframe.Keyframe;
 import com.moulberry.flashback.keyframe.KeyframeType;
 import com.moulberry.flashback.keyframe.change.KeyframeChange;
+import com.moulberry.flashback.keyframe.change.KeyframeChangeCameraFov;
+import com.moulberry.flashback.keyframe.change.KeyframeChangeCameraPositionOnly;
+import com.moulberry.flashback.keyframe.change.KeyframeChangeCameraRotationOnly;
+import com.moulberry.flashback.keyframe.change.KeyframeChangeCameraShake;
 import com.moulberry.flashback.keyframe.change.KeyframeChangeCameraSwitch;
+import com.moulberry.flashback.keyframe.change.KeyframeChangeFov;
 import com.moulberry.flashback.keyframe.change.KeyframeChangeTickrate;
 import com.moulberry.flashback.keyframe.handler.KeyframeHandler;
+import com.moulberry.flashback.keyframe.impl.CameraKeyframe;
+import com.moulberry.flashback.keyframe.impl.CameraPositionKeyframe;
+import com.moulberry.flashback.keyframe.impl.CameraRotationKeyframe;
 import com.moulberry.flashback.keyframe.impl.CameraSwitchKeyframe;
+import com.moulberry.flashback.keyframe.types.CameraFovKeyframeType;
+import com.moulberry.flashback.keyframe.types.CameraKeyframeType;
+import com.moulberry.flashback.keyframe.types.CameraPositionKeyframeType;
+import com.moulberry.flashback.keyframe.types.CameraRotationKeyframeType;
+import com.moulberry.flashback.keyframe.types.CameraShakeKeyframeType;
 import com.moulberry.flashback.keyframe.types.CameraSwitchKeyframeType;
+import com.moulberry.flashback.keyframe.types.FOVKeyframeType;
 import com.moulberry.flashback.keyframe.types.SpectateKeyframeType;
 import com.moulberry.flashback.playback.ReplayServer;
 import com.moulberry.flashback.visuals.ReplayVisuals;
@@ -27,6 +41,7 @@ import net.minecraft.world.entity.player.PlayerModelPart;
 import net.minecraft.world.level.GameType;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.Nullable;
+import org.joml.Vector3d;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -61,7 +76,7 @@ public class EditorState {
      * {@link #save(Path)}.
      */
     public int schemaVersion = 0;
-    public static final int CURRENT_SCHEMA_VERSION = 1;
+    public static final int CURRENT_SCHEMA_VERSION = 2;
 
     public double zoomMin = 0.0;
     public double zoomMax = 1.0;
@@ -532,6 +547,13 @@ public class EditorState {
      * makes the migrated project behave bit-for-bit as it did: previously every camera track applied
      * unconditionally, and now the switch selects the only camera there is.
      *
+     * <p>Schema 1 -> 2 gives each camera its own persistent values. A camera is now a thing that can
+     * exist with no keyframes at all, holding its own position, rotation, fov and shake, and those
+     * values are applied whenever no enabled track covers them. A project written before then has no
+     * such values, so each camera is seeded from its own earliest camera keyframe - see
+     * {@link #seedCameraStaticValues}. That is what stops opening an old project from teleporting the
+     * view to the world origin the moment its camera track is disabled or deleted.
+     *
      * <p>Scene-scoped tracks stay on the scene, because they describe the world rather than a
      * viewpoint and must not change when the camera cuts.
      *
@@ -555,11 +577,219 @@ public class EditorState {
             changed = true;
         }
 
+        // Only projects written before cameras carried their own values are seeded. A camera that
+        // already has values - a new project, or one at schema 2 - is left exactly as it is, so this
+        // cannot overwrite anything the user has set.
+        if (this.schemaVersion < 2) {
+            for (EditorScene scene : this.scenes) {
+                if (scene == null || scene.cameras == null) {
+                    continue;
+                }
+                for (EditorCamera camera : scene.cameras) {
+                    if (camera != null && seedCameraStaticValues(camera, scene)) {
+                        changed = true;
+                    }
+                }
+            }
+        }
+
+        // Reflection and keyframe adapters do not validate persisted lens values. Repair every
+        // source, otherwise the first evaluation would immediately undo the visual-override repair.
+        for (EditorScene scene : this.scenes) {
+            for (EditorCamera camera : scene.cameras) {
+                if (camera.fov != -1 && camera.fov != saneOverrideFov(camera.fov)) {
+                    camera.fov = saneOverrideFov(camera.fov);
+                    changed = true;
+                }
+            }
+            for (KeyframeTrack track : scene.keyframeTracks) {
+                for (Keyframe key : track.keyframesByTick.values()) {
+                    if (key instanceof com.moulberry.flashback.keyframe.impl.CameraFovKeyframe fov
+                            && fov.fov != saneOverrideFov(fov.fov)) {
+                        fov.fov = saneOverrideFov(fov.fov); changed = true;
+                    } else if (key instanceof com.moulberry.flashback.keyframe.impl.FOVKeyframe fov
+                            && fov.fov != saneOverrideFov(fov.fov)) {
+                        fov.fov = saneOverrideFov(fov.fov); changed = true;
+                    }
+                }
+            }
+        }
+
+        // Visual overrides are repaired on every load, not only for old schema versions: a project
+        // can be written with a degenerate value by any build, and the symptom is a blank view rather
+        // than an error, so the value is not allowed to survive a load.
+        if (sanitiseVisualOverrides()) {
+            changed = true;
+        }
+
         if (this.schemaVersion < CURRENT_SCHEMA_VERSION) {
             this.schemaVersion = CURRENT_SCHEMA_VERSION;
             changed = true;
         }
         return changed;
+    }
+
+    /**
+     * The smallest field of view an override may hold.
+     *
+     * <p>Below about a degree the projection is degenerate and nothing in the world draws, and a
+     * field of view of zero - or of {@link Float#MIN_VALUE}, which a clamped drag can turn a negative
+     * sentinel into - is the difference between a shot and a blank screen.
+     */
+    private static final float MIN_OVERRIDE_FOV = 1.0f;
+
+    /**
+     * A field of view that an override may actually use.
+     *
+     * <p>Shared by the load-time repair and the inspector, so a value written by either path is held
+     * to the same rule. Package-private so the headless checks can exercise it without a game client.
+     */
+    static float saneOverrideFov(float amount) {
+        return ReplayVisuals.saneFov(amount);
+    }
+
+    /**
+     * Repairs visual overrides that were written with degenerate numbers.
+     *
+     * <p>The one that has actually bitten: a drag field whose lower bound was
+     * {@link Float#MIN_VALUE} - the smallest POSITIVE float - clamped the fov sentinel of -1 up to
+     * about zero, so a project could be saved with the override switched on and a field of view that
+     * renders nothing. The override then falls back to the configured default, which is what the
+     * editor would have used had it never been overridden at all. Values that are simply out of a
+     * sensible range are only touched when they cannot mean anything: a fog distance is clamped to
+     * zero, and a non-finite value in any of them is replaced by its default.
+     *
+     * @return whether anything was changed, so the repaired project is saved back
+     */
+    private boolean sanitiseVisualOverrides() {
+        ReplayVisuals visuals = this.replayVisuals;
+        if (visuals == null) {
+            return false;
+        }
+        boolean changed = false;
+
+        // -1 is the "not overridden" sentinel and is left alone while the override is off, so a
+        // project that never used the override is not rewritten. Only an override that is actually in
+        // force is held to a usable angle.
+        if ((visuals.overrideFov || visuals.overrideFovAmount != -1)
+                && (!Float.isFinite(visuals.overrideFovAmount) || visuals.overrideFovAmount < MIN_OVERRIDE_FOV || visuals.overrideFovAmount >= 180)) {
+            visuals.overrideFovAmount = saneOverrideFov(visuals.overrideFovAmount);
+            changed = true;
+        }
+
+        // Fog is a distance: nothing at or below zero can be meant, and a non-finite value would
+        // collapse the frustum. Roll is an angle and shake is an amount, both of which may legitimately
+        // be negative, so only their non-finite values are repaired.
+        if (!Float.isFinite(visuals.overrideFogStart) || visuals.overrideFogStart < 0) {
+            visuals.overrideFogStart = 0.0f;
+            changed = true;
+        }
+        if (!Float.isFinite(visuals.overrideFogEnd) || visuals.overrideFogEnd < 0) {
+            visuals.overrideFogEnd = Math.max(1.0f, visuals.overrideFogStart);
+            changed = true;
+        }
+        if (!Float.isFinite(visuals.overrideRollAmount)) {
+            visuals.overrideRollAmount = 0.0f;
+            changed = true;
+        }
+        if (!Float.isFinite(visuals.cameraShakeXFrequency)) {
+            visuals.cameraShakeXFrequency = 1.0f;
+            changed = true;
+        }
+        if (!Float.isFinite(visuals.cameraShakeXAmplitude)) {
+            visuals.cameraShakeXAmplitude = 0.0f;
+            changed = true;
+        }
+        if (!Float.isFinite(visuals.cameraShakeYFrequency)) {
+            visuals.cameraShakeYFrequency = 1.0f;
+            changed = true;
+        }
+        if (!Float.isFinite(visuals.cameraShakeYAmplitude)) {
+            visuals.cameraShakeYAmplitude = 0.0f;
+            changed = true;
+        }
+        return changed;
+    }
+
+    /**
+     * Copies a camera's own earliest keyframed position and rotation onto the camera itself.
+     *
+     * <p>Before cameras carried their own values, the camera WAS its keyframes: the only thing that
+     * said where it stood was its camera track. Seeding from that means a project written then opens
+     * with the camera where it always appeared to be, so removing or disabling the track later leaves
+     * the view where it was instead of snapping it to the origin.
+     *
+     * <p>A camera whose keyframes say nothing about a property - a free camera whose only row tracks
+     * an entity, say - keeps the defaults for it. There is nothing in the project to seed from, and
+     * inventing a value would be worse than leaving the camera at rest.
+     *
+     * <p>Package-private so it can be exercised without a game client.
+     *
+     * @return true if any value was written
+     */
+    static boolean seedCameraStaticValues(EditorCamera camera, EditorScene scene) {
+        if (camera.hasStaticValues()) {
+            return false;
+        }
+
+        boolean changed = false;
+
+        CameraKeyframe whole = earliestKeyframeOf(scene, camera, CameraKeyframeType.INSTANCE, CameraKeyframe.class);
+        if (whole != null) {
+            camera.x = whole.position.x;
+            camera.y = whole.position.y;
+            camera.z = whole.position.z;
+            camera.yaw = whole.yaw;
+            camera.pitch = whole.pitch;
+            camera.roll = whole.roll;
+            changed = true;
+        }
+
+        // A camera saved by a build between the two schemas could already have granular tracks. They
+        // are more specific than the whole-camera keyframe, so they win where they exist.
+        CameraPositionKeyframe position = earliestKeyframeOf(scene, camera, CameraPositionKeyframeType.INSTANCE, CameraPositionKeyframe.class);
+        if (position != null) {
+            camera.x = position.position.x;
+            camera.y = position.position.y;
+            camera.z = position.position.z;
+            changed = true;
+        }
+
+        CameraRotationKeyframe rotation = earliestKeyframeOf(scene, camera, CameraRotationKeyframeType.INSTANCE, CameraRotationKeyframe.class);
+        if (rotation != null) {
+            camera.yaw = rotation.yaw;
+            camera.pitch = rotation.pitch;
+            camera.roll = rotation.roll;
+            changed = true;
+        }
+
+        return changed;
+    }
+
+    /** The keyframe of one type with the smallest tick among the tracks this camera owns. */
+    @Nullable
+    private static <T extends Keyframe> T earliestKeyframeOf(EditorScene scene, EditorCamera camera,
+                                                             KeyframeType<?> type, Class<T> keyframeClass) {
+        if (scene.keyframeTracks == null) {
+            return null;
+        }
+
+        T earliest = null;
+        int earliestTick = Integer.MAX_VALUE;
+
+        for (KeyframeTrack track : scene.keyframeTracks) {
+            if (track == null || track.keyframeType != type || !camera.id.equals(track.cameraId)) {
+                continue;
+            }
+            Map.Entry<Integer, Keyframe> entry = track.keyframesByTick.firstEntry();
+            if (entry == null || entry.getKey() >= earliestTick || !keyframeClass.isInstance(entry.getValue())) {
+                continue;
+            }
+            earliestTick = entry.getKey();
+            earliest = keyframeClass.cast(entry.getValue());
+        }
+
+        return earliest;
     }
 
     /**
@@ -657,54 +887,23 @@ public class EditorState {
      * editor can preview the viewpoint the user just picked.
      */
     public void previewCamera(EditorCamera camera, float tick) {
-        if (camera == null) {
-            return;
-        }
-        EditorScene scene = this.currentScene();
-        if (scene == null) {
-            return;
-        }
-
-        KeyframeHandler keyframeHandler = new MinecraftKeyframeHandler(
-            Minecraft.getInstance());
-
-        if (camera.kind != EditorCamera.Kind.SPECTATE) {
-            keyframeHandler.applySpectate(null);
-        }
-        for (KeyframeTrack track : scene.keyframeTracks) {
-            if (camera.id.equals(track.cameraId)) {
-                applyTrackChange(keyframeHandler, track, tick);
-            }
-        }
+        this.previewCamera(camera, tick, 0);
     }
 
-    /**
-     * Applies one track's value at {@code tick}, including the held last keyframe that handlers
-     * which always want a value rely on.
-     *
-     * @return true if anything was applied
-     */
-    private boolean applyTrackChange(KeyframeHandler keyframeHandler, KeyframeTrack keyframeTrack, float tick) {
-        if (!keyframeTrack.enabled || !keyframeTrack.keyframeType.supportsHandler(keyframeHandler)) {
-            return false;
+    @ApiStatus.Internal
+    public void previewCamera(EditorCamera camera, float tick, long stamp) {
+        if (camera == null) return;
+        boolean unlock = !this.sceneLock.validate(stamp);
+        // A caller holding a timeline stamp must not re-enter the mapping updater or scene lock.
+        if (unlock) {
+            this.updateRealtimeMappingsIfNeeded();
+            stamp = this.sceneLock.readLock();
         }
-
-        KeyframeChange change = keyframeTrack.createKeyframeChange(tick, this.realTimeMapping);
-        if (change == null) {
-            // A single keyframe, or a tick past the last one, produces no interpolated value: fall
-            // back to holding the last keyframe for handlers that want a value every tick.
-            if (keyframeHandler.alwaysApplyLastKeyframe() && !keyframeTrack.keyframeType.neverApplyLastKeyframe()
-                    && !keyframeTrack.keyframesByTick.isEmpty()
-                    && keyframeTrack.keyframesByTick.lastKey() <= tick) {
-                change = keyframeTrack.createKeyframeChange(keyframeTrack.keyframesByTick.lastKey(), this.realTimeMapping);
-            }
+        try {
+            this.applyCameraPass(new MinecraftKeyframeHandler(Minecraft.getInstance()), this.currentScene(), camera, tick);
+        } finally {
+            if (unlock) this.sceneLock.unlock(stamp);
         }
-
-        if (change == null) {
-            return false;
-        }
-        change.apply(keyframeHandler);
-        return true;
     }
 
     public void applyKeyframes(KeyframeHandler keyframeHandler, float tick) {
@@ -713,119 +912,196 @@ public class EditorState {
 
     @ApiStatus.Internal
     public void applyKeyframes(KeyframeHandler keyframeHandler, float tick, long stamp) {
-        // Whatever was followed before this pass is stale: only this pass's tracking keyframes say
-        // who the camera is following now, and an orbit centred on its subject must not inherit last
-        // frame's answer from a different camera.
-        keyframeHandler.setFollowedPosition(null);
-        Set<Class<? extends KeyframeChange>> applied = new HashSet<>();
-        Map<Class<? extends KeyframeChange>, KeyframeTrack> maybeApplyLastTick = new HashMap<>();
-
-        updateRealtimeMappingsIfNeeded();
-
-        boolean unlock = false;
-        if (!this.sceneLock.validate(stamp)) {
+        boolean unlock = !this.sceneLock.validate(stamp);
+        // A supplied stamp already protects the scene; StampedLock is not reentrant. Refresh only
+        // outside the caller's critical section, otherwise even a read-to-write upgrade deadlocks.
+        if (unlock) {
+            updateRealtimeMappingsIfNeeded();
             stamp = this.sceneLock.readLock();
-            unlock = true;
         }
         try {
             EditorScene scene = this.currentScene();
-
-            // The viewpoint is decided first, because a camera owns its own tracks and only the
-            // camera being output may animate it. Applying every camera's tracks would make the
-            // result depend on row order and let two viewpoints fight over the camera.
-            EditorCamera activeCamera = scene.resolveCameraAt(tick);
-
-            // The switch lane only selects a camera; applying it here would apply a cut without the
-            // camera it names.
-            KeyframeTrack switchTrack = scene.cameraSwitchTrack();
-
-            // When a switch is in force, only the selected camera may animate the view; otherwise two
-            // viewpoints would fight and the result would depend on row order. Without a switch - a
-            // project saved before cameras existed, for instance - every camera track applies exactly
-            // as it always did.
-            boolean filterToActiveCamera = activeCamera != null;
-
-            if (filterToActiveCamera && activeCamera.kind != EditorCamera.Kind.SPECTATE) {
-                // A positioned camera is not following anyone, so leaving the spectated entity is
-                // part of switching to it. Without this the view stays attached to a player and the
-                // camera's tracks animate something nobody is looking through.
-                keyframeHandler.applySpectate(null);
-            }
-
-            for (KeyframeTrack keyframeTrack : scene.keyframeTracks) {
-                // Ignore lines that are disabled
-                if (!keyframeTrack.enabled) {
-                    continue;
-                }
-
-                // The switch lane decides which camera is output; it is applied through
-                // resolveCameraAt, not as a track of its own.
-                if (keyframeTrack == switchTrack) {
-                    continue;
-                }
-
-                // Only the selected camera's tracks may animate the view, so a camera's tracks can
-                // never be mixed with another's.
-                if (filterToActiveCamera && keyframeTrack.cameraId != null
-                        && !keyframeTrack.cameraId.equals(activeCamera.id)) {
-                    continue;
-                }
-
-                Class<? extends KeyframeChange> keyframeChangeType = keyframeTrack.keyframeType.keyframeChangeType();
-
-                // Already applied a keyframe of this type earlier, skip
-                if (keyframeChangeType == null || (!keyframeTrack.keyframeType.allowApplyingDuplicateKeyframeChanges() && applied.contains(keyframeChangeType))) {
-                    continue;
-                }
-
-                if (!keyframeTrack.keyframeType.supportsHandler(keyframeHandler)) {
-                    continue;
-                }
-
-                // Try to apply keyframes, mark applied if successful
-
-                KeyframeChange change = keyframeTrack.createKeyframeChange(tick, this.realTimeMapping);
-                if (change == null) {
-                    if (keyframeHandler.alwaysApplyLastKeyframe() && !keyframeTrack.keyframeType.neverApplyLastKeyframe() && !keyframeTrack.keyframesByTick.isEmpty()) {
-                        if (keyframeTrack.keyframesByTick.lastKey() <= tick) {
-                            KeyframeTrack oldTrack = maybeApplyLastTick.get(keyframeChangeType);
-                            if (oldTrack == null || keyframeTrack.keyframesByTick.lastKey() > oldTrack.keyframesByTick.lastKey()) {
-                                maybeApplyLastTick.put(keyframeChangeType, keyframeTrack);
-                            }
-                        }
-                    }
-                    continue;
-                }
-
-                if (change.getClass() != keyframeChangeType) {
-                    throw new IllegalStateException("Expected " + keyframeChangeType + ", got " + change.getClass() + ". Caused by: " + keyframeTrack.keyframeType.id());
-                }
-
-                applied.add(keyframeChangeType);
-                maybeApplyLastTick.remove(keyframeChangeType);
-                change.apply(keyframeHandler);
-            }
-
-            if (keyframeHandler.alwaysApplyLastKeyframe() && !maybeApplyLastTick.isEmpty()) {
-                for (Map.Entry<Class<? extends KeyframeChange>, KeyframeTrack> entry : maybeApplyLastTick.entrySet()) {
-                    KeyframeTrack keyframeTrack = entry.getValue();
-                    KeyframeChange change = keyframeTrack.createKeyframeChange(keyframeTrack.keyframesByTick.lastKey(), this.realTimeMapping);
-
-                    if (change == null) {
-                        continue;
-                    }
-
-                    if (change.getClass() != entry.getKey()) {
-                        throw new IllegalStateException("Expected " + entry.getKey() + ", got " + change.getClass() + ". Caused by: " + keyframeTrack.keyframeType.id());
-                    }
-
-                    change.apply(keyframeHandler);
-                }
-            }
+            this.applyCameraPass(keyframeHandler, scene, scene.resolveCameraAt(tick), tick);
         } finally {
-            if (unlock) {
-                this.sceneLock.unlock(stamp);
+            if (unlock) this.sceneLock.unlock(stamp);
+        }
+    }
+
+    private record ResolvedChange(KeyframeTrack track, KeyframeChange change) {}
+
+    /** Resolve once, then fold the same ordered writes for playback, preview and the inspector. */
+    private List<ResolvedChange> resolveChanges(EditorScene scene, @Nullable EditorCamera camera,
+                                                KeyframeHandler handler, float tick) {
+        List<ResolvedChange> changes = new ArrayList<>();
+        Set<Class<? extends KeyframeChange>> applied = new HashSet<>();
+        // Deterministic held-change order: first occurrence of each class in timeline order.
+        Map<Class<? extends KeyframeChange>, KeyframeTrack> held = new LinkedHashMap<>();
+        KeyframeTrack switchTrack = scene.cameraSwitchTrack();
+        for (KeyframeTrack track : scene.keyframeTracks) {
+            if (track == null || !track.enabled || track == switchTrack || track.keyframeType == null
+                    || (camera != null && track.cameraId != null && !camera.id.equals(track.cameraId))) continue;
+            Class<? extends KeyframeChange> type = track.keyframeType.keyframeChangeType();
+            if (type == null || !track.keyframeType.supportsHandler(handler)
+                    || (!track.keyframeType.allowApplyingDuplicateKeyframeChanges() && applied.contains(type))) continue;
+            KeyframeChange change = track.createKeyframeChange(tick, this.realTimeMapping);
+            if (change == null) {
+                if (handler.alwaysApplyLastKeyframe() && !track.keyframeType.neverApplyLastKeyframe()
+                        && !track.keyframesByTick.isEmpty() && track.keyframesByTick.lastKey() <= tick) {
+                    KeyframeTrack previous = held.get(type);
+                    if (previous == null || track.keyframesByTick.lastKey() > previous.keyframesByTick.lastKey()) held.put(type, track);
+                }
+                continue;
             }
+            if (change.getClass() != type) throw new IllegalStateException("Wrong change type on " + track.keyframeType.id());
+            applied.add(type);
+            held.remove(type);
+            changes.add(new ResolvedChange(track, change));
+        }
+        for (Map.Entry<Class<? extends KeyframeChange>, KeyframeTrack> entry : held.entrySet()) {
+            KeyframeChange change = entry.getValue().createKeyframeChange(entry.getValue().keyframesByTick.lastKey(), this.realTimeMapping);
+            if (change != null) {
+                if (change.getClass() != entry.getKey()) throw new IllegalStateException("Wrong held change type");
+                changes.add(new ResolvedChange(entry.getValue(), change));
+            }
+        }
+        return changes;
+    }
+
+    private void applyCameraPass(KeyframeHandler handler, EditorScene scene, @Nullable EditorCamera camera, float tick) {
+        handler.beginCameraFrame();
+        handler.setFollowedPosition(null);
+        if (camera != null && camera.kind != EditorCamera.Kind.SPECTATE) handler.applySpectate(null);
+        List<ResolvedChange> changes = this.resolveChanges(scene, camera, handler, tick);
+        if (camera != null && camera.kind == EditorCamera.Kind.FREE) this.applyStaticCameraValues(handler, camera, changes);
+        for (ResolvedChange resolved : changes) resolved.change().apply(handler);
+    }
+
+    private static boolean changesProperty(KeyframeChange change, CameraProperty property) {
+        boolean wholePose = change instanceof com.moulberry.flashback.keyframe.change.KeyframeChangeCameraPosition
+            || change instanceof com.moulberry.flashback.keyframe.change.KeyframeChangeCameraPositionOrbit
+            || change instanceof com.moulberry.flashback.keyframe.change.KeyframeChangeTrackEntity;
+        return switch (property) {
+            case POSITION -> wholePose || change instanceof KeyframeChangeCameraPositionOnly;
+            case ROTATION -> wholePose || change instanceof KeyframeChangeCameraRotationOnly;
+            case FOV -> change instanceof KeyframeChangeCameraFov || change instanceof KeyframeChangeFov;
+            case SHAKE -> change instanceof KeyframeChangeCameraShake;
+        };
+    }
+
+    private void applyStaticCameraValues(KeyframeHandler handler, EditorCamera camera, List<ResolvedChange> changes) {
+        boolean position = false, rotation = false, fov = false, shake = false;
+        for (ResolvedChange resolved : changes) {
+            KeyframeChange change = resolved.change();
+            position |= changesProperty(change, CameraProperty.POSITION);
+            rotation |= changesProperty(change, CameraProperty.ROTATION);
+            fov |= changesProperty(change, CameraProperty.FOV);
+            shake |= changesProperty(change, CameraProperty.SHAKE);
+        }
+        if (!position && handler.supportsKeyframeChange(KeyframeChangeCameraPositionOnly.class))
+            handler.applyCameraPositionOnly(new Vector3d(camera.x, camera.y, camera.z));
+        if (!rotation && handler.supportsKeyframeChange(KeyframeChangeCameraRotationOnly.class))
+            handler.applyCameraRotationOnly(camera.yaw, camera.pitch, camera.roll);
+        if (!fov && camera.fov != -1 && (handler.supportsKeyframeChange(KeyframeChangeFov.class)
+                || handler.supportsKeyframeChange(KeyframeChangeCameraFov.class))) handler.applyFov(saneOverrideFov(camera.fov));
+        if (!shake && camera.overrideCameraShake && handler.supportsKeyframeChange(KeyframeChangeCameraShake.class))
+            handler.applyCameraShake(camera.cameraShakeXFrequency, camera.cameraShakeXAmplitude,
+                camera.cameraShakeYFrequency, camera.cameraShakeYAmplitude);
+    }
+
+    /**
+     * What a camera evaluates to at a tick: the values its own tracks produce, and which properties
+     * those are.
+     *
+     * @param position        where the camera would be
+     * @param yaw             its yaw in degrees
+     * @param pitch           its pitch in degrees
+     * @param roll            its roll in degrees
+     * @param fov             its field of view, or -1 when nothing drives it and it has no override
+     * @param shakeXFrequency the camera shake it would use, if shake is driven or opted into
+     * @param shakeXAmplitude ...
+     * @param shakeYFrequency ...
+     * @param shakeYAmplitude ...
+     * @param driven          the properties a track is animating at this tick
+     */
+    public record CameraEvaluation(Vector3d position, double yaw, double pitch, double roll, float fov,
+                                   float shakeXFrequency, float shakeXAmplitude,
+                                   float shakeYFrequency, float shakeYAmplitude,
+                                   Set<CameraProperty> driven) {
+
+        /** Whether a track is producing this property's value at the evaluated tick. */
+        public boolean isDriven(CameraProperty property) {
+            return this.driven.contains(property);
+        }
+    }
+
+    /** One independently animatable property of a camera object. */
+    public enum CameraProperty {
+        POSITION, ROTATION, FOV, SHAKE
+    }
+
+    /** Evaluates the selected camera, even when another camera is currently output. Caller owns the scene stamp. */
+    public CameraEvaluation evaluateCameraAt(EditorScene scene, EditorCamera camera, float tick) {
+        CameraCapture capture = new CameraCapture(camera);
+        for (ResolvedChange resolved : this.resolveChanges(scene, camera, capture, tick)) resolved.change().apply(capture);
+        return new CameraEvaluation(capture.position, capture.yaw, capture.pitch, capture.roll, capture.fov,
+            capture.shakeXFrequency, capture.shakeXAmplitude, capture.shakeYFrequency, capture.shakeYAmplitude,
+            Set.copyOf(capture.driven));
+    }
+
+    /**
+     * The winning animated track for a selected camera property, or null for a stored fallback.
+     * Uses exactly the evaluation resolver and write order, including held changes and scene lanes.
+     * Caller owns the scene stamp; this method acquires no locks and changes no camera state.
+     */
+    @Nullable
+    public KeyframeTrack evaluatedCameraTrack(EditorScene scene, EditorCamera camera, float tick, CameraProperty property) {
+        KeyframeTrack winner = null;
+        CameraCapture capture = new CameraCapture(camera);
+        for (ResolvedChange resolved : this.resolveChanges(scene, camera, capture, tick)) {
+            if (changesProperty(resolved.change(), property)) winner = resolved.track();
+        }
+        return winner;
+    }
+
+    /** Captures writes in their actual application order instead of inventing property precedence. */
+    private static final class CameraCapture implements KeyframeHandler {
+        Vector3d position, followed;
+        double yaw, pitch, roll;
+        float fov, shakeXFrequency, shakeXAmplitude, shakeYFrequency, shakeYAmplitude;
+        final Set<CameraProperty> driven = EnumSet.noneOf(CameraProperty.class);
+        CameraCapture(EditorCamera camera) {
+            this.position = new Vector3d(camera.x, camera.y, camera.z);
+            this.yaw = camera.yaw; this.pitch = camera.pitch; this.roll = camera.roll;
+            this.fov = camera.fov == -1 ? -1 : saneOverrideFov(camera.fov);
+            this.shakeXFrequency = camera.cameraShakeXFrequency;
+            this.shakeYFrequency = camera.cameraShakeYFrequency;
+            this.shakeXAmplitude = camera.overrideCameraShake ? camera.cameraShakeXAmplitude : 0;
+            this.shakeYAmplitude = camera.overrideCameraShake ? camera.cameraShakeYAmplitude : 0;
+        }
+        @Override public boolean alwaysApplyLastKeyframe() { return true; }
+        @Override public Minecraft getMinecraft() { return Minecraft.getInstance(); }
+        @Override public boolean supportsKeyframeChange(Class<? extends KeyframeChange> type) {
+            return type == com.moulberry.flashback.keyframe.change.KeyframeChangeCameraPosition.class
+                || type == com.moulberry.flashback.keyframe.change.KeyframeChangeCameraPositionOrbit.class
+                || type == com.moulberry.flashback.keyframe.change.KeyframeChangeTrackEntity.class
+                || type == KeyframeChangeCameraPositionOnly.class || type == KeyframeChangeCameraRotationOnly.class
+                || type == KeyframeChangeFov.class || type == KeyframeChangeCameraFov.class || type == KeyframeChangeCameraShake.class;
+        }
+        @Override public void setFollowedPosition(Vector3d value) { this.followed = value; }
+        @Override public Vector3d followedPosition() { return this.followed; }
+        @Override public void applyCameraPosition(Vector3d value, double yaw, double pitch, double roll) {
+            this.applyCameraPositionOnly(value); this.applyCameraRotationOnly(yaw, pitch, roll);
+        }
+        @Override public void applyCameraPositionOnly(Vector3d value) {
+            this.position = new Vector3d(value); this.driven.add(CameraProperty.POSITION);
+        }
+        @Override public void applyCameraRotationOnly(double yaw, double pitch, double roll) {
+            this.yaw = yaw; this.pitch = pitch; this.roll = roll; this.driven.add(CameraProperty.ROTATION);
+        }
+        @Override public void applyFov(float value) { this.fov = saneOverrideFov(value); this.driven.add(CameraProperty.FOV); }
+        @Override public void applyCameraShake(float xf, float xa, float yf, float ya) {
+            this.shakeXFrequency = xf; this.shakeXAmplitude = xa; this.shakeYFrequency = yf; this.shakeYAmplitude = ya;
+            this.driven.add(CameraProperty.SHAKE);
         }
     }
 

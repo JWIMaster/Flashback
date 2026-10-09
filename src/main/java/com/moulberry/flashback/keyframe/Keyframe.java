@@ -98,6 +98,9 @@ public abstract class Keyframe {
             }
             Keyframe keyframe = switch (type) {
                 case "camera" -> context.deserialize(json, CameraKeyframe.class);
+                case "camera_position" -> context.deserialize(json, CameraPositionKeyframe.class);
+                case "camera_rotation" -> context.deserialize(json, CameraRotationKeyframe.class);
+                case "camera_fov" -> context.deserialize(json, CameraFovKeyframe.class);
                 case "camera_orbit" -> context.deserialize(json, CameraOrbitKeyframe.class);
                 case "track_entity" -> context.deserialize(json, TrackEntityKeyframe.class);
                 case "fov" -> context.deserialize(json, FOVKeyframe.class);
@@ -105,6 +108,7 @@ public abstract class Keyframe {
                 case "freeze" -> context.deserialize(json, FreezeKeyframe.class);
                 case "timelapse" -> context.deserialize(json, TimelapseKeyframe.class);
                 case "time" -> context.deserialize(json, TimeOfDayKeyframe.class);
+                case "weather" -> context.deserialize(json, WeatherKeyframe.class);
                 case "camera_shake" -> context.deserialize(json, CameraShakeKeyframe.class);
                 case "camera_switch" -> context.deserialize(json, CameraSwitchKeyframe.class);
                 case "spectate" -> context.deserialize(json, SpectateKeyframe.class);
@@ -123,6 +127,18 @@ public abstract class Keyframe {
                 case CameraKeyframe cameraKeyframe -> {
                     jsonObject = (JsonObject) context.serialize(cameraKeyframe);
                     jsonObject.addProperty("type", "camera");
+                }
+                case CameraPositionKeyframe cameraPositionKeyframe -> {
+                    jsonObject = (JsonObject) context.serialize(cameraPositionKeyframe);
+                    jsonObject.addProperty("type", "camera_position");
+                }
+                case CameraRotationKeyframe cameraRotationKeyframe -> {
+                    jsonObject = (JsonObject) context.serialize(cameraRotationKeyframe);
+                    jsonObject.addProperty("type", "camera_rotation");
+                }
+                case CameraFovKeyframe cameraFovKeyframe -> {
+                    jsonObject = (JsonObject) context.serialize(cameraFovKeyframe);
+                    jsonObject.addProperty("type", "camera_fov");
                 }
                 case CameraOrbitKeyframe cameraOrbitKeyframe -> {
                     jsonObject = (JsonObject) context.serialize(cameraOrbitKeyframe);
@@ -143,6 +159,10 @@ public abstract class Keyframe {
                 case TimeOfDayKeyframe timeOfDayKeyframe -> {
                     jsonObject = (JsonObject) context.serialize(timeOfDayKeyframe);
                     jsonObject.addProperty("type", "time");
+                }
+                case WeatherKeyframe weatherKeyframe -> {
+                    jsonObject = (JsonObject) context.serialize(weatherKeyframe);
+                    jsonObject.addProperty("type", "weather");
                 }
                 case CameraShakeKeyframe cameraShakeKeyframe -> {
                     jsonObject = (JsonObject) context.serialize(cameraShakeKeyframe);
