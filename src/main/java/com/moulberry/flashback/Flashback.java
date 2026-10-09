@@ -72,6 +72,7 @@ import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.server.level.BlockDestructionProgress;
 import net.minecraft.client.multiplayer.ClientPacketListener;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.protocol.common.ClientCommonPacketListener;
@@ -319,11 +320,24 @@ public class Flashback implements ModInitializer, ClientModInitializer {
 
         ClientPlayNetworking.registerGlobalReceiver(FlashbackClearBlockDestruction.TYPE, (payload, context) -> {
             if (Flashback.isInReplay()) {
-                // The crack overlay is the level's list of blocks being broken; emptying it is what
-                // takes the cracks off the screen.
-                ClientLevel level = Minecraft.getInstance().level;
-                if (level != null) {
-                    level.destructionProgress().clear();
+                try {
+                    ClientLevel level = Minecraft.getInstance().level;
+                    if (level != null) {
+                        // Each one is taken down through the level's own method rather than by
+                        // emptying its map. The level keeps two of them - one by position for
+                        // drawing, one by breaker for the packets - and a position left in one
+                        // without the other makes the next crack for that block throw, which the
+                        // client reports as a network protocol error and disconnects over.
+                        List<BlockDestructionProgress> breaking = new ArrayList<>();
+                        for (SortedSet<BlockDestructionProgress> progresses : level.destructionProgress().values()) {
+                            breaking.addAll(progresses);
+                        }
+                        for (BlockDestructionProgress progress : breaking) {
+                            level.destroyBlockProgress(progress.getId(), progress.getPos(), -1);
+                        }
+                    }
+                } catch (Throwable t) {
+                    Flashback.LOGGER.warn("Could not clear the block breaking progress", t);
                 }
             }
         });
