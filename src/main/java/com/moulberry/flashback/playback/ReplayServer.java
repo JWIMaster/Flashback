@@ -1046,7 +1046,9 @@ public class ReplayServer extends IntegratedServer {
             // is dropped.
             for (ReplayPlayer replayViewer : this.getReplayViewers()) {
                 ServerPlayNetworking.send(replayViewer, FlashbackClearBlockDestruction.INSTANCE);
-                replayViewer.resendFirstPersonTicks = 20;
+                if (skippedTicks) {
+                    replayViewer.resendFirstPersonTicks = 20;
+                }
             }
         } else if (!this.replayPaused && this.targetTick < this.totalTicks) {
             // Normal playback

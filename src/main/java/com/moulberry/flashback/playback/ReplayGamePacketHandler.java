@@ -1264,9 +1264,6 @@ public class ReplayGamePacketHandler implements ClientGamePacketListener {
                 if (inventoryIndex < replayViewer.lastFirstPersonHotbarItems.length) {
                     replayViewer.lastFirstPersonHotbarItems[inventoryIndex] = itemStack.copy();
                 }
-                // DIAGNOSTIC (temporary)
-                Flashback.LOGGER.info("[hotbar-diag] fromSlot={} inventoryIndex={} item={} viewer={}",
-                    slot, inventoryIndex, itemStack, replayViewer.getName().getString());
                 ServerPlayNetworking.send(replayViewer,
                     new FlashbackRemoteSetSlot(player.getId(), inventoryIndex, itemStack.copy()));
             }

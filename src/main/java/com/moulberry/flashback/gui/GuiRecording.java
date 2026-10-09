@@ -170,9 +170,6 @@ public final class GuiRecording {
         if (menuType == null) {
             return;
         }
-        // DIAGNOSTIC (temporary)
-        Flashback.LOGGER.info("[gui-diag] restated container={} type={} slots={}",
-            menu.containerId, menuType, menu.slots.size());
         write(FlashbackRemoteContainer.open(menu.containerId, menuType, screen.getTitle()));
         write(FlashbackRemoteContainer.content(menu.containerId, menu.getItems(), menu.getCarried()));
         fillMirror(menu.getItems(), menu.getCarried());
@@ -204,10 +201,7 @@ public final class GuiRecording {
                 // A copy, because the payload is not encoded until the end of the tick and the
                 // stack it describes belongs to a live menu.
                 write(FlashbackRemoteContainer.slot(menu.containerId, i, now.copy()));
-                // DIAGNOSTIC (temporary)
                 if (!now.isEmpty()) {
-                    Flashback.LOGGER.info("[gui-diag] mirrored container={} slot={} item={}",
-                        menu.containerId, i, now);
                 }
             }
         }

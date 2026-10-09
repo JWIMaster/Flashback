@@ -410,9 +410,6 @@ public class Flashback implements ModInitializer, ClientModInitializer {
                 if (entity instanceof Player player) {
                     player.getInventory().setItem(payload.slot(), payload.itemStack());
                 }
-                // DIAGNOSTIC (temporary)
-                Flashback.LOGGER.info("[hotbar-diag] client entity={} found={} slot={} item={}",
-                    payload.entityId(), entity != null, payload.slot(), payload.itemStack());
             }
         });
 

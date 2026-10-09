@@ -126,8 +126,6 @@ public final class GuiDisplay {
     }
 
     private static void open(FlashbackRemoteContainer container) {
-        // DIAGNOSTIC (temporary)
-        Flashback.LOGGER.info("[gui-diag] open container={} type={}", container.containerId(), container.menuType());
         clear();
         shownId = container.containerId();
         menuType = container.menuType() == null ? "" : container.menuType();
@@ -184,9 +182,6 @@ public final class GuiDisplay {
             }
             menu = built;
             screen = containerScreen(type, built, detached, title);
-            // DIAGNOSTIC (temporary)
-            Flashback.LOGGER.info("[gui-diag] built type={} slots={} screen={}", menuType, built.slots.size(),
-                screen == null ? "none" : screen.getClass().getSimpleName());
         } catch (Throwable t) {
             Flashback.LOGGER.warn("Could not build the screen for the recorded container {}", menuType, t);
             menu = null;
@@ -242,11 +237,7 @@ public final class GuiDisplay {
         if (wrote) {
             menu.getSlot(slot).set(item.copy());
         }
-        // DIAGNOSTIC (temporary)
         if (slot < 12) {
-            Flashback.LOGGER.info("[gui-diag] apply container={} slot={} empty={} menu={} wrote={} readBack={}",
-                shownId, slot, item.isEmpty(), menu == null ? "none" : menu.getClass().getSimpleName(), wrote,
-                wrote ? menu.getSlot(slot).getItem() : "n/a");
         }
     }
 
