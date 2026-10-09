@@ -500,17 +500,23 @@ public class ReplayGamePacketHandler implements ClientGamePacketListener {
 
                 for (ReplayPlayer replayViewer : this.replayServer.getReplayViewers()) {
                     if (Objects.equals(replayViewer.lastFirstPersonDataUUID, player.getUUID())) {
-                        // The hotbar mirror holds nine stacks. Which of the menu's slots are the
-                        // hotbar is the menu's business, not a constant to be guessed at.
                         if (slot >= 0 && slot < inventoryMenu.slots.size()) {
                             net.minecraft.world.inventory.Slot menuSlot = inventoryMenu.getSlot(slot);
-                            int hotbar = menuSlot.getContainerSlot();
-                            if (menuSlot.container == player.getInventory()
-                                    && hotbar < replayViewer.lastFirstPersonHotbarItems.length) {
-                                replayViewer.lastFirstPersonHotbarItems[hotbar] = itemStack.copy();
+                            if (menuSlot.container == player.getInventory()) {
+                                // The payload sets a slot of the recorded player's own inventory, so it
+                                // has to carry an inventory index and not the menu's. A menu puts the
+                                // hotbar at 36 and the armour at 5; the inventory puts the hotbar at 0
+                                // and the armour at 36. Sending the menu's number for a hotbar change
+                                // wrote it into the armour, offhand, body and saddle instead - which is
+                                // what made the hotbar and the first-person view look wrong.
+                                int inventoryIndex = menuSlot.getContainerSlot();
+                                if (inventoryIndex < replayViewer.lastFirstPersonHotbarItems.length) {
+                                    replayViewer.lastFirstPersonHotbarItems[inventoryIndex] = itemStack.copy();
+                                }
+                                ServerPlayNetworking.send(replayViewer,
+                                    new FlashbackRemoteSetSlot(player.getId(), inventoryIndex, itemStack.copy()));
                             }
                         }
-                        ServerPlayNetworking.send(replayViewer, new FlashbackRemoteSetSlot(player.getId(), slot, itemStack.copy()));
                     }
                 }
             }

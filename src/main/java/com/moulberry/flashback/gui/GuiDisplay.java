@@ -2,6 +2,11 @@ package com.moulberry.flashback.gui;
 
 import com.moulberry.flashback.Flashback;
 import com.moulberry.flashback.packet.FlashbackRemoteContainer;
+import com.moulberry.flashback.playback.ReplayServer;
+import com.moulberry.flashback.state.EditorCamera;
+import com.moulberry.flashback.state.EditorScene;
+import com.moulberry.flashback.state.EditorState;
+import com.moulberry.flashback.state.EditorStateManager;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.screens.MenuScreens;
@@ -335,9 +340,35 @@ public final class GuiDisplay {
      * replaced: those are for deciding whether to read a player's inventory, and here they would
      * blink the window off for a frame whenever an entity was swapped.
      */
-    private static boolean cameraIsOnAPlayer(Minecraft minecraft) {
+    private static boolean showingThroughAPlayer(Minecraft minecraft) {
+        if (shotIsSpectate()) {
+            return true;
+        }
         Entity camera = minecraft.getCameraEntity();
         return camera instanceof AbstractClientPlayer player && player != minecraft.player;
+    }
+
+    /**
+     * Whether the camera cut being played is a spectate camera.
+     *
+     * <p>The camera entity is usually the answer to this, and is what is checked above when it is
+     * available. It is not available while exporting: the exporter snaps the viewer's own player to
+     * the shot and renders from it, so the entity is never a player there and a spectate shot would
+     * lose its interface. The cut's own camera says the same thing in both cases, because it is what
+     * the exporter itself is following.
+     */
+    private static boolean shotIsSpectate() {
+        EditorState editorState = EditorStateManager.getCurrent();
+        ReplayServer replayServer = Flashback.getReplayServer();
+        if (editorState == null || replayServer == null) {
+            return false;
+        }
+        EditorScene scene = editorState.currentSceneOrNull();
+        if (scene == null) {
+            return false;
+        }
+        EditorCamera camera = scene.resolveCameraAt(replayServer.getReplayTick());
+        return camera != null && camera.kind == EditorCamera.Kind.SPECTATE;
     }
 
     /** Draws the container, if there is one. Called from the HUD render pass. */
@@ -360,7 +391,7 @@ public final class GuiDisplay {
             // F1 hides the interface; a container the recording had open is part of it.
             return;
         }
-        if (!cameraIsOnAPlayer(minecraft)) {
+        if (!showingThroughAPlayer(minecraft)) {
             // The container belongs to the player being recorded, so it is only part of the picture
             // when the camera is that player's eyes. On a free or orbit camera it would be a window
             // floating over a shot nobody is looking through.

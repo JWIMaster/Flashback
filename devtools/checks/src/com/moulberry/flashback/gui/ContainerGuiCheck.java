@@ -37,6 +37,8 @@ public class ContainerGuiCheck {
         theOverlayShowsTheGameScreenWithoutTakingOver(root);
         theHooksAreOnTheMethodsThatActuallyRun(root);
         theRecordingCarriesWhatTheServerNeverRepeats(root);
+        theHotbarPayloadCarriesAnInventoryIndex(root);
+        theInterfaceFollowsTheShotAsWellAsTheCamera(root);
         theRecordingWritesTheClosesTheServerDoesNot(root);
 
         if (failures > 0) {
@@ -203,6 +205,39 @@ public class ContainerGuiCheck {
             recorder.contains("GuiRecording.observePacket"));
         check("a snapshot says what was open",
             recorder.contains("GuiRecording.onSnapshot"));
+    }
+
+    /**
+     * The payload that updates the recorded player's inventory carries an inventory index.
+     *
+     * <p>A menu puts the hotbar at 36 and the armour at 5; the inventory puts the hotbar at 0 and the
+     * armour at 36. Sending the menu's number for a hotbar change wrote it into the armour, offhand,
+     * body and saddle instead, which is what made the first-person hotbar look wrong.
+     */
+    private static void theHotbarPayloadCarriesAnInventoryIndex(Path root) throws Exception {
+        String handler = Files.readString(
+            root.resolve("com/moulberry/flashback/playback/ReplayGamePacketHandler.java"));
+        String body = methodBody(handler, "handleContainerSetSlot");
+        check("the container slot handler was found", body != null);
+        if (body == null) {
+            return;
+        }
+        check("it asks the slot for its own container's index", body.contains("getContainerSlot()"));
+        check("the recorded player's inventory is not addressed with a menu index",
+            !body.contains("FlashbackRemoteSetSlot(player.getId(), slot,"));
+    }
+
+    /**
+     * Whether to draw follows the cut as well as the camera entity, because the exporter renders
+     * from the viewer's own player: the entity is never a player there, so a spectate shot would
+     * lose its interface.
+     */
+    private static void theInterfaceFollowsTheShotAsWellAsTheCamera(Path root) throws Exception {
+        String display = Files.readString(root.resolve("com/moulberry/flashback/gui/GuiDisplay.java"));
+        check("the interface asks what the cut's camera is",
+            display.contains("resolveCameraAt") && display.contains("Kind.SPECTATE"));
+        check("and still asks what the camera entity is",
+            display.contains("getCameraEntity"));
     }
 
     private static Method handlerFor(Class<?> packetType) {
