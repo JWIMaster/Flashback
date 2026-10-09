@@ -34,6 +34,8 @@ public class ReplayPlayer extends ServerPlayer {
     public int forceRespectateTickCount = 0;
 
     public UUID lastFirstPersonDataUUID = null;
+    /** Ticks left to keep re-sending the first-person state, so a dropped payload heals. */
+    public int resendFirstPersonTicks = 0;
     public int lastFirstPersonSelectedSlot = -1;
     public ItemStack[] lastFirstPersonHotbarItems = new ItemStack[9];
     public float lastFirstPersonExperienceProgress = 0.0f;

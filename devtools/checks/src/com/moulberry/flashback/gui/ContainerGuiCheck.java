@@ -39,6 +39,7 @@ public class ContainerGuiCheck {
         theRecordingCarriesWhatTheServerNeverRepeats(root);
         theHotbarPayloadCarriesAnInventoryIndex(root);
         theInterfaceFollowsTheShotAsWellAsTheCamera(root);
+        aSeekRestoresWhatTheClientCannotRebuild(root);
         theRecordingWritesTheClosesTheServerDoesNot(root);
 
         if (failures > 0) {
@@ -238,6 +239,31 @@ public class ContainerGuiCheck {
             display.contains("resolveCameraAt") && display.contains("Kind.SPECTATE"));
         check("and still asks what the camera entity is",
             display.contains("getCameraEntity"));
+    }
+
+    /**
+     * A seek leaves client state that only the packets it skipped would have corrected.
+     *
+     * <p>A crack overlay belongs to the tick it was sent for and the packet that stops it is not
+     * replayed, so it has to be cleared. And the first-person state - the hotbar of the player being
+     * watched - has to be re-sent for more than one tick, because the jump can reach the client
+     * before the player it describes does, and a payload for an entity that is not there yet is
+     * dropped: send it once and the hotbar stays empty until something in it next changes.
+     */
+    private static void aSeekRestoresWhatTheClientCannotRebuild(Path root) throws Exception {
+        String server = Files.readString(root.resolve("com/moulberry/flashback/playback/ReplayServer.java"));
+        int jump = server.indexOf("this.jumpToTick = -1;");
+        check("the seek is where it was expected", jump >= 0);
+        if (jump < 0) {
+            return;
+        }
+        String after = server.substring(jump, Math.min(server.length(), jump + 1600));
+        check("a seek clears the crack overlay", after.contains("FlashbackClearBlockDestruction"));
+        check("a seek re-sends the first-person state over several ticks",
+            after.contains("resendFirstPersonTicks"));
+
+        String player = Files.readString(root.resolve("com/moulberry/flashback/playback/ReplayPlayer.java"));
+        check("the resend window is state on the viewer", player.contains("resendFirstPersonTicks"));
     }
 
     private static Method handlerFor(Class<?> packetType) {

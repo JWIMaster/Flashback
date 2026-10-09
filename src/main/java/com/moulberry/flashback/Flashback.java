@@ -24,6 +24,7 @@ import com.moulberry.flashback.gui.GuiRecording;
 import com.moulberry.flashback.keyframe.KeyframeRegistry;
 import com.moulberry.flashback.keyframe.types.*;
 import com.moulberry.flashback.packet.FlashbackAccurateEntityPosition;
+import com.moulberry.flashback.packet.FlashbackClearBlockDestruction;
 import com.moulberry.flashback.packet.FlashbackClearEntities;
 import com.moulberry.flashback.packet.FlashbackClearParticles;
 import com.moulberry.flashback.packet.FinishedServerTick;
@@ -70,6 +71,7 @@ import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.gui.Font;
+import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.multiplayer.ClientPacketListener;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.protocol.common.ClientCommonPacketListener;
@@ -212,6 +214,7 @@ public class Flashback implements ModInitializer, ClientModInitializer {
 
         PayloadTypeRegistry.clientboundPlay().register(FlashbackForceClientTick.TYPE, StreamCodec.unit(FlashbackForceClientTick.INSTANCE));
         PayloadTypeRegistry.clientboundPlay().register(FlashbackClearParticles.TYPE, StreamCodec.unit(FlashbackClearParticles.INSTANCE));
+        PayloadTypeRegistry.clientboundPlay().register(FlashbackClearBlockDestruction.TYPE, StreamCodec.unit(FlashbackClearBlockDestruction.INSTANCE));
         PayloadTypeRegistry.clientboundPlay().register(FlashbackClearEntities.TYPE, StreamCodec.unit(FlashbackClearEntities.INSTANCE));
         PayloadTypeRegistry.clientboundPlay().register(FlashbackInstantlyLerp.TYPE, StreamCodec.unit(FlashbackInstantlyLerp.INSTANCE));
         PayloadTypeRegistry.clientboundPlay().register(FlashbackRemoteSelectHotbarSlot.TYPE, FlashbackRemoteSelectHotbarSlot.STREAM_CODEC);
@@ -311,6 +314,17 @@ public class Flashback implements ModInitializer, ClientModInitializer {
         ClientPlayNetworking.registerGlobalReceiver(FlashbackClearParticles.TYPE, (payload, context) -> {
             if (Flashback.isInReplay()) {
                 Minecraft.getInstance().particleEngine.clearParticles();
+            }
+        });
+
+        ClientPlayNetworking.registerGlobalReceiver(FlashbackClearBlockDestruction.TYPE, (payload, context) -> {
+            if (Flashback.isInReplay()) {
+                // The crack overlay is the level's list of blocks being broken; emptying it is what
+                // takes the cracks off the screen.
+                ClientLevel level = Minecraft.getInstance().level;
+                if (level != null) {
+                    level.destructionProgress().clear();
+                }
             }
         });
 

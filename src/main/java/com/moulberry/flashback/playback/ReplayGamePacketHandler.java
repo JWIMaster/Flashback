@@ -243,6 +243,10 @@ public class ReplayGamePacketHandler implements ClientGamePacketListener {
         for (ReplayPlayer replayViewer : this.replayServer.getReplayViewers()) {
             if (Objects.equals(replayViewer.lastFirstPersonDataUUID, addEntityPacket.getUUID())) {
                 replayViewer.lastFirstPersonDataUUID = null;
+                // The client is told about this player before it has them, so the state is sent for a
+                // few ticks rather than once and the payloads that arrive too early are not the only
+                // ones the hotbar gets.
+                replayViewer.resendFirstPersonTicks = 20;
             }
         }
 

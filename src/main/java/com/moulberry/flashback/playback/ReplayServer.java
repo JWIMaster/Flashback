@@ -18,6 +18,7 @@ import com.moulberry.flashback.keyframe.impl.BlockOverrideKeyframe;
 import com.moulberry.flashback.keyframe.types.BlockOverrideKeyframeType;
 import com.moulberry.flashback.packet.FlashbackAccurateEntityPosition;
 import com.moulberry.flashback.packet.FlashbackClearEntities;
+import com.moulberry.flashback.packet.FlashbackClearBlockDestruction;
 import com.moulberry.flashback.packet.FlashbackClearParticles;
 import com.moulberry.flashback.packet.FlashbackForceClientTick;
 import com.moulberry.flashback.packet.FlashbackInstantlyLerp;
@@ -1019,6 +1020,16 @@ public class ReplayServer extends IntegratedServer {
             // no longer playing.
             GuiDisplayForwarder.reset(this);
             this.endOfReplayResetSent = false;
+
+            // A crack belongs to the tick it was sent for, and a jump does not replay the packet that
+            // would have stopped it, so the client is told to take them all down. The first-person
+            // state is re-sent for a little while rather than once: the jump may reach the client
+            // before the player it describes does, and a payload for an entity that is not there yet
+            // is dropped.
+            for (ReplayPlayer replayViewer : this.getReplayViewers()) {
+                ServerPlayNetworking.send(replayViewer, FlashbackClearBlockDestruction.INSTANCE);
+                replayViewer.resendFirstPersonTicks = 20;
+            }
         } else if (!this.replayPaused && this.targetTick < this.totalTicks) {
             // Normal playback
             this.targetTick += 1;
@@ -1089,7 +1100,11 @@ public class ReplayServer extends IntegratedServer {
             Entity camera = replayViewer.getCamera();
             if (camera != replayViewer && camera instanceof Player playerCamera) {
                 Inventory inventory = playerCamera.getInventory();
-                if (!Objects.equals(replayViewer.lastFirstPersonDataUUID, playerCamera.getUUID())) {
+                boolean resend = replayViewer.resendFirstPersonTicks > 0;
+                if (resend) {
+                    replayViewer.resendFirstPersonTicks -= 1;
+                }
+                if (resend || !Objects.equals(replayViewer.lastFirstPersonDataUUID, playerCamera.getUUID())) {
                     replayViewer.lastFirstPersonDataUUID = playerCamera.getUUID();
 
                     replayViewer.lastFirstPersonExperienceProgress = playerCamera.experienceProgress;
