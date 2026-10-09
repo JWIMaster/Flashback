@@ -1240,9 +1240,18 @@ public class ReplayGamePacketHandler implements ClientGamePacketListener {
             return;
         }
 
+        net.minecraft.world.inventory.Slot menuSlot = inventoryMenu.getSlot(slot);
+        if (!menuSlot.mayPlace(itemStack)) {
+            // A slot that will not accept this item is the signature of a slot number being read in
+            // the wrong numbering. An armour slot only takes armour, so leaf litter arriving in the
+            // boots slot is not a change that ever happened - it is a hotbar change that has been
+            // resolved through the menu's numbering and landed in the armour instead. The same change
+            // arrives separately as the player's own inventory slot and is applied there.
+            return;
+        }
+
         inventoryMenu.getSlot(slot).set(itemStack.copy());
 
-        net.minecraft.world.inventory.Slot menuSlot = inventoryMenu.getSlot(slot);
         if (menuSlot.container != player.getInventory()) {
             // A crafting grid slot is not a slot of the player's inventory and has no inventory
             // number to be given.
