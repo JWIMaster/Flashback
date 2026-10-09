@@ -62,6 +62,12 @@ public final class GuiDisplayForwarder {
 
     /** One slot of the open container changed. */
     public static void slot(ReplayServer server, int containerId, int slot, ItemStack item) {
+        // DIAGNOSTIC (temporary): the armour is menu slots 5-8. This is where the recording's own
+        // account of them goes past, before the display has had any chance to misapply it.
+        if (slot >= 5 && slot <= 8) {
+            com.moulberry.flashback.Flashback.LOGGER.info("[armour-send] container={} slot={} item={}",
+                containerId, slot, item);
+        }
         if (!isOpen(containerId)) {
             return;
         }
