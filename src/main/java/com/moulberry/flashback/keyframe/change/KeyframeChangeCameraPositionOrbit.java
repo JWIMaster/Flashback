@@ -11,14 +11,23 @@ import net.minecraft.world.phys.Vec3;
 import org.joml.Vector3d;
 
 public record KeyframeChangeCameraPositionOrbit(Vector3d center, double distance, double yaw, double pitch,
-                                               boolean centreOnTarget, UUID target) implements KeyframeChange {
+                                               boolean centreOnTarget, UUID target, boolean smoothFollow,
+                                               double lagSeconds) implements KeyframeChange {
+
+    /** How far behind its subject a lagging orbit trails, in replay ticks. */
+    private static final double TICKS_PER_SECOND = 20.0;
 
     public KeyframeChangeCameraPositionOrbit(Vector3d center, double distance, double yaw, double pitch) {
-        this(center, distance, yaw, pitch, false, null);
+        this(center, distance, yaw, pitch, false, null, false, 0.0);
     }
 
     public KeyframeChangeCameraPositionOrbit(Vector3d center, double distance, double yaw, double pitch, boolean centreOnTarget) {
-        this(center, distance, yaw, pitch, centreOnTarget, null);
+        this(center, distance, yaw, pitch, centreOnTarget, null, false, 0.0);
+    }
+
+    public KeyframeChangeCameraPositionOrbit(Vector3d center, double distance, double yaw, double pitch,
+                                             boolean centreOnTarget, UUID target) {
+        this(center, distance, yaw, pitch, centreOnTarget, target, false, 0.0);
     }
 
     @Override
@@ -35,8 +44,20 @@ public record KeyframeChangeCameraPositionOrbit(Vector3d center, double distance
             if (this.target != null && minecraft != null && minecraft.level != null) {
                 Entity subject = minecraft.level.getEntities().get(this.target);
                 if (subject != null && subject != player) {
-                    Vec3 eye = subject.getEyePosition(minecraft.deltaTracker.getGameTimeDeltaPartialTick(true));
+                    float partialTick = minecraft.deltaTracker.getGameTimeDeltaPartialTick(true);
+                    Vec3 eye = subject.getEyePosition(partialTick);
                     centre = new Vector3d(eye.x, eye.y, eye.z);
+                    if (this.smoothFollow) {
+                        // Lagging follows a point the subject has already left, so the camera trails
+                        // them and eases back into place instead of turning with every twitch.
+                        float now = minecraft.level.getGameTime() + partialTick;
+                        OrbitFollowDelay.record(this.target, now, centre);
+                        Vector3d delayed = OrbitFollowDelay.sample(this.target,
+                            (float) (now - Math.max(0.0, this.lagSeconds) * TICKS_PER_SECOND));
+                        if (delayed != null) {
+                            centre = delayed;
+                        }
+                    }
                 }
             } else if (this.target == null) {
                 Vector3d followed = keyframeHandler.followedPosition();
@@ -72,7 +93,9 @@ public record KeyframeChangeCameraPositionOrbit(Vector3d center, double distance
             Interpolation.linear(this.yaw, other.yaw, amount),
             Interpolation.linear(this.pitch, other.pitch, amount),
             this.centreOnTarget,
-            amount < 0.5 ? this.target : other.target
+            amount < 0.5 ? this.target : other.target,
+            this.smoothFollow,
+            this.lagSeconds
         );
     }
 }

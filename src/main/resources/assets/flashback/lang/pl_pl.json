@@ -18,6 +18,7 @@
   "flashback.keybind.create_marker_2": "Stwórz znacznik #2",
   "flashback.keybind.create_marker_3": "Stwórz znacznik #3",
   "flashback.keybind.create_marker_4": "Stwórz znacznik #4",
+  "flashback.keybind.stop_spectating": null,
 
   "flashback.option.recording_controls": "Sterowanie nagrywaniem",
   "flashback.option.recording_controls.location": "Miejsce przycisków w menu",
@@ -431,6 +432,9 @@
   "flashback.new_orbit_camera": null,
   "flashback.orbit_centre_on_player": null,
   "flashback.orbit_centre_on_player_hint": null,
+  "flashback.orbit_lag_behind": null,
+  "flashback.orbit_lag_behind_hint": null,
+  "flashback.orbit_lag_seconds": null,
   "flashback.camera_kind.orbit": null,
   "flashback.camera_kind.free": null,
   "flashback.camera_kind.spectate": null,

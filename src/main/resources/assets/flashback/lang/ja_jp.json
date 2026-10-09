@@ -18,6 +18,7 @@
   "flashback.keybind.create_marker_2": "マーカー #2 を作成",
   "flashback.keybind.create_marker_3": "マーカー #3 を作成",
   "flashback.keybind.create_marker_4": "マーカー #4 を作成",
+  "flashback.keybind.stop_spectating": null,
 
   "flashback.option.recording_controls": "録画コントロール",
   "flashback.option.recording_controls.location": "録画コントロールボタンの位置",
@@ -431,6 +432,9 @@
   "flashback.new_orbit_camera": null,
   "flashback.orbit_centre_on_player": null,
   "flashback.orbit_centre_on_player_hint": null,
+  "flashback.orbit_lag_behind": null,
+  "flashback.orbit_lag_behind_hint": null,
+  "flashback.orbit_lag_seconds": null,
   "flashback.camera_kind.orbit": null,
   "flashback.camera_kind.free": null,
   "flashback.camera_kind.spectate": null,

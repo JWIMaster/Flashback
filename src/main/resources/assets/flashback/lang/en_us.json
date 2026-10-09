@@ -18,6 +18,7 @@
   "flashback.keybind.create_marker_2": "Create Marker #2",
   "flashback.keybind.create_marker_3": "Create Marker #3",
   "flashback.keybind.create_marker_4": "Create Marker #4",
+  "flashback.keybind.stop_spectating": "Stop Spectating",
 
   "flashback.option.recording_controls": "Recording Controls",
   "flashback.option.recording_controls.location": "Pause Menu Controls Location",

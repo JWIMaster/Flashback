@@ -88,6 +88,9 @@ public class CameraOrbitKeyframeType implements KeyframeType<CameraOrbitKeyframe
        cameraOrbitCenter[2] = (float) subject.z;
        ImBoolean centreOnTarget = new ImBoolean(true);
         UUID[] selectedTarget = {null};
+        // A new orbit trails its subject by default: that is the softer look the option exists for.
+        ImBoolean lagBehind = new ImBoolean(true);
+        float[] cameraOrbitLag = new float[]{0.35f};
 
         return () -> {
             ImGui.checkbox(I18n.get("flashback.orbit_centre_on_player"), centreOnTarget);
@@ -114,6 +117,13 @@ public class CameraOrbitKeyframeType implements KeyframeType<CameraOrbitKeyframe
             ImGuiHelper.inputFloat(I18n.get("flashback.distance"), cameraOrbitDistance);
             ImGuiHelper.inputFloat(I18n.get("flashback.yaw"), cameraOrbitYaw);
             ImGuiHelper.inputFloat(I18n.get("flashback.pitch"), cameraOrbitPitch);
+            if (centreOnTarget.get()) {
+                ImGui.checkbox(I18n.get("flashback.orbit_lag_behind"), lagBehind);
+                ImGuiHelper.tooltip(I18n.get("flashback.orbit_lag_behind_hint"));
+                if (lagBehind.get()) {
+                    ImGuiHelper.inputFloat(I18n.get("flashback.orbit_lag_seconds"), cameraOrbitLag);
+                }
+            }
 
             boolean needsTarget = centreOnTarget.get() && selectedTarget[0] == null;
             if (needsTarget) ImGui.beginDisabled();
@@ -122,7 +132,8 @@ public class CameraOrbitKeyframeType implements KeyframeType<CameraOrbitKeyframe
             if (!needsTarget && (add || ReplayUI.consumeConfirm())) {
                 Vector3d center = new Vector3d(cameraOrbitCenter[0], cameraOrbitCenter[1], cameraOrbitCenter[2]);
                 return new CameraOrbitKeyframe(center, cameraOrbitDistance[0], cameraOrbitYaw[0], cameraOrbitPitch[0],
-                    InterpolationType.getDefault(), centreOnTarget.get(), centreOnTarget.get() ? selectedTarget[0] : null);
+                    InterpolationType.getDefault(), centreOnTarget.get(), centreOnTarget.get() ? selectedTarget[0] : null,
+                    centreOnTarget.get() && lagBehind.get(), Math.max(0.0f, Math.min(2.0f, cameraOrbitLag[0])));
             }
             ImGui.sameLine();
             if (ImGui.button(I18n.get("gui.cancel")) || ReplayUI.consumeCancel()) {

@@ -46,6 +46,7 @@ public class ContainerGuiCheck {
         theInterfaceOnlyAppearsThroughAPlayer(root);
         freshWatchedPlayersStartWithASettledHand(root);
         handYawStaysOnSameTurnAsCamera(root);
+        stopSpectatingHasAKey(root);
         if (failures > 0) {
             System.out.println("FAILURES: " + failures);
             System.exit(1);
@@ -425,6 +426,16 @@ public class ContainerGuiCheck {
         // not 358 degrees apart. The hand renderer rotates by one tenth of this delta.
         check("crossing the yaw seam keeps the hand's rotation below one degree",
             Math.abs(wrapDegrees(-179.0f - 179.0f) * 0.1f) < 1.0f);
+    }
+
+    /** Leaving a spectated player is bound to a key so it does not need the editor open. */
+    private static void stopSpectatingHasAKey(Path root) throws Exception {
+        String flashback = Files.readString(root.resolve("com/moulberry/flashback/Flashback.java"));
+        check("stop spectating is bound to a key by default",
+            flashback.contains("\"flashback.keybind.stop_spectating\"") && flashback.contains("InputConstants.KEY_M"));
+        check("the stop spectating key leaves the spectated entity while in a replay",
+            flashback.contains("stopSpectatingKeyBind.consumeClick()")
+                && flashback.contains("stopSpectating()"));
     }
 
     private static float wrapDegrees(float degrees) {

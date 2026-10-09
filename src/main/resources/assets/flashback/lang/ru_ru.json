@@ -18,6 +18,7 @@
   "flashback.keybind.create_marker_2": "Создать маркер #2",
   "flashback.keybind.create_marker_3": "Создать маркер #3",
   "flashback.keybind.create_marker_4": "Создать маркер #4",
+  "flashback.keybind.stop_spectating": null,
 
   "flashback.option.recording_controls": "Управление записью",
   "flashback.option.recording_controls.location": "Расположение управления в меню паузы",
@@ -429,6 +430,9 @@
   "flashback.new_orbit_camera": null,
   "flashback.orbit_centre_on_player": null,
   "flashback.orbit_centre_on_player_hint": null,
+  "flashback.orbit_lag_behind": null,
+  "flashback.orbit_lag_behind_hint": null,
+  "flashback.orbit_lag_seconds": null,
   "flashback.camera_kind.orbit": null,
   "flashback.camera_kind.free": null,
   "flashback.camera_kind.spectate": null,

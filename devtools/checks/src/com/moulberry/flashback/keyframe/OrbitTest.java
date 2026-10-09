@@ -2,6 +2,7 @@ package com.moulberry.flashback.keyframe;
 
 import com.moulberry.flashback.keyframe.change.KeyframeChange;
 import com.moulberry.flashback.keyframe.change.KeyframeChangeCameraPositionOrbit;
+import com.moulberry.flashback.keyframe.change.OrbitFollowDelay;
 import com.moulberry.flashback.keyframe.handler.KeyframeHandler;
 import com.moulberry.flashback.keyframe.impl.CameraOrbitKeyframe;
 import com.moulberry.flashback.keyframe.interpolation.InterpolationType;
@@ -125,11 +126,56 @@ public class OrbitTest {
         KeyframeChange interpolated = following.createChange().interpolate(anchored.createChange(), 0.5);
         check("interpolating keeps the choice", ((KeyframeChangeCameraPositionOrbit) interpolated).centreOnTarget());
 
+        lagChecks();
+
         if (failures > 0) {
             System.out.println("FAILURES: " + failures);
             System.exit(1);
         }
         System.out.println("All orbit tests passed");
+    }
+
+    /**
+     * The lag behind option: the camera aims where its subject was, a set number of ticks ago.
+     *
+     * <p>Movement here is one block per tick on the x axis, so a sample's x is the tick it describes.
+     */
+    private static void lagChecks() {
+        UUID subject = UUID.randomUUID();
+        OrbitFollowDelay.clear();
+        for (int tick = 0; tick <= 40; tick++) {
+            OrbitFollowDelay.record(subject, tick, new Vector3d(tick, 64, 0));
+        }
+
+        Vector3d delayed = OrbitFollowDelay.sample(subject, 40 - 10);
+        check("lagging aims ten ticks back", delayed != null && Math.abs(delayed.x - 30) < 0.001);
+
+        Vector3d between = OrbitFollowDelay.sample(subject, 30.5f);
+        check("lagging interpolates between recorded ticks", between != null && Math.abs(between.x - 30.5) < 0.001);
+
+        Vector3d ahead = OrbitFollowDelay.sample(subject, 100);
+        check("lagging cannot aim into the future", ahead != null && Math.abs(ahead.x - 40) < 0.001);
+
+        // At the very start there is no history to lag into, so the oldest known position is used and
+        // the delay eases in rather than the camera snapping.
+        OrbitFollowDelay.clear();
+        OrbitFollowDelay.record(subject, 500, new Vector3d(5, 64, 0));
+        Vector3d firstFrame = OrbitFollowDelay.sample(subject, 500 - 10);
+        check("lagging starts from the oldest known position", firstFrame != null && Math.abs(firstFrame.x - 5) < 0.001);
+
+        // Changing subject, or seeking, must not drag the old position along.
+        UUID other = UUID.randomUUID();
+        OrbitFollowDelay.record(other, 501, new Vector3d(9, 70, 0));
+        Vector3d afterSubjectChange = OrbitFollowDelay.sample(other, 501);
+        check("a new subject forgets the old one", afterSubjectChange != null && Math.abs(afterSubjectChange.x - 9) < 0.001);
+        check("the old subject has no history left", OrbitFollowDelay.sample(subject, 500) == null);
+
+        OrbitFollowDelay.clear();
+        OrbitFollowDelay.record(other, 600, new Vector3d(1, 64, 0));
+        OrbitFollowDelay.record(other, 700, new Vector3d(2, 64, 0));
+        Vector3d afterSeek = OrbitFollowDelay.sample(other, 700 - 10);
+        check("a seek drops history from before it", afterSeek != null && Math.abs(afterSeek.x - 2) < 0.001);
+        OrbitFollowDelay.clear();
     }
 
     private static void check(String what, boolean condition) {

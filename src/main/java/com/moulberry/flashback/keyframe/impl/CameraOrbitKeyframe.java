@@ -44,6 +44,13 @@ public class CameraOrbitKeyframe extends Keyframe {
      */
     public boolean centreOnTarget;
     public UUID target;
+    /**
+     * Whether the camera trails the subject instead of being glued to them. Absent from older
+     * projects, where an orbit always followed exactly.
+     */
+    public boolean smoothFollow;
+    /** How far behind the subject a lagging orbit trails, in seconds. */
+    public float lagSeconds = 0.35f;
 
     public CameraOrbitKeyframe(Vector3d center, float distance, float yaw, float pitch) {
         this(center, distance, yaw, pitch, InterpolationType.getDefault());
@@ -60,7 +67,15 @@ public class CameraOrbitKeyframe extends Keyframe {
 
     public CameraOrbitKeyframe(Vector3d center, float distance, float yaw, float pitch,
                                InterpolationType interpolationType, boolean centreOnTarget, UUID target) {
+        this(center, distance, yaw, pitch, interpolationType, centreOnTarget, target, false, 0.35f);
+    }
+
+    public CameraOrbitKeyframe(Vector3d center, float distance, float yaw, float pitch,
+                               InterpolationType interpolationType, boolean centreOnTarget, UUID target,
+                               boolean smoothFollow, float lagSeconds) {
         this.target = target;
+        this.smoothFollow = smoothFollow;
+        this.lagSeconds = lagSeconds;
         this.center = center;
         this.distance = distance;
         this.yaw = yaw;
@@ -77,7 +92,7 @@ public class CameraOrbitKeyframe extends Keyframe {
     @Override
     public Keyframe copy() {
         return new CameraOrbitKeyframe(new Vector3d(this.center), this.distance, this.yaw, this.pitch,
-            this.interpolationType(), this.centreOnTarget, this.target);
+            this.interpolationType(), this.centreOnTarget, this.target, this.smoothFollow, this.lagSeconds);
     }
 
     @Override
@@ -99,6 +114,22 @@ public class CameraOrbitKeyframe extends Keyframe {
                     }
                 }
                 ImGui.endCombo();
+            }
+
+            ImBoolean lagsBehind = new ImBoolean(this.smoothFollow);
+            if (ImGui.checkbox(I18n.get("flashback.orbit_lag_behind"), lagsBehind)) {
+                boolean value = lagsBehind.get();
+                update.accept(keyframe -> ((CameraOrbitKeyframe) keyframe).smoothFollow = value);
+            }
+            ImGuiHelper.tooltip(I18n.get("flashback.orbit_lag_behind_hint"));
+            if (lagsBehind.get()) {
+                float[] lag = new float[]{this.lagSeconds};
+                if (ImGuiHelper.inputFloat(I18n.get("flashback.orbit_lag_seconds"), lag)) {
+                    float value = Math.max(0.0f, Math.min(2.0f, lag[0]));
+                    if (value != this.lagSeconds) {
+                        update.accept(keyframe -> ((CameraOrbitKeyframe) keyframe).lagSeconds = value);
+                    }
+                }
             }
         }
 
@@ -135,13 +166,16 @@ public class CameraOrbitKeyframe extends Keyframe {
     }
 
     private static KeyframeChangeCameraPositionOrbit createChangeFrom(Vector3d center, float distance, float yaw,
-                                                                    float pitch, boolean centreOnTarget, UUID target) {
-        return new KeyframeChangeCameraPositionOrbit(center, distance, yaw, pitch, centreOnTarget, target);
+                                                                    float pitch, boolean centreOnTarget, UUID target,
+                                                                    boolean smoothFollow, float lagSeconds) {
+        return new KeyframeChangeCameraPositionOrbit(center, distance, yaw, pitch, centreOnTarget, target,
+            smoothFollow, lagSeconds);
     }
 
     @Override
     public KeyframeChange createChange() {
-        return createChangeFrom(this.center, this.distance, this.yaw, this.pitch, this.centreOnTarget, this.target);
+        return createChangeFrom(this.center, this.distance, this.yaw, this.pitch, this.centreOnTarget, this.target,
+            this.smoothFollow, this.lagSeconds);
     }
 
     @Override
@@ -163,7 +197,8 @@ public class CameraOrbitKeyframe extends Keyframe {
         float pitch = CatmullRom.value(this.pitch, ((CameraOrbitKeyframe)p1).pitch, ((CameraOrbitKeyframe)p2).pitch,
                 ((CameraOrbitKeyframe)p3).pitch, time1, time2, time3, amount);
 
-        return createChangeFrom(position, distance, yaw, pitch, this.centreOnTarget, this.target);
+        return createChangeFrom(position, distance, yaw, pitch, this.centreOnTarget, this.target,
+            this.smoothFollow, this.lagSeconds);
     }
 
     @Override
@@ -175,7 +210,8 @@ public class CameraOrbitKeyframe extends Keyframe {
         double yaw = Hermite.value(Maps.transformValues(keyframes, k -> (double) ((CameraOrbitKeyframe)k).yaw), amount);
         double pitch = Hermite.value(Maps.transformValues(keyframes, k -> (double) ((CameraOrbitKeyframe)k).pitch), amount);
 
-        return createChangeFrom(position, (float) distance, (float) yaw, (float) pitch, this.centreOnTarget, this.target);
+        return createChangeFrom(position, (float) distance, (float) yaw, (float) pitch, this.centreOnTarget, this.target,
+            this.smoothFollow, this.lagSeconds);
     }
 
     public static class TypeAdapter implements JsonSerializer<CameraOrbitKeyframe>, JsonDeserializer<CameraOrbitKeyframe> {
@@ -189,7 +225,10 @@ public class CameraOrbitKeyframe extends Keyframe {
             InterpolationType interpolationType = context.deserialize(jsonObject.get("interpolation_type"), InterpolationType.class);
             boolean centreOnTarget = jsonObject.has("centre_on_target") && jsonObject.get("centre_on_target").getAsBoolean();
             UUID target = jsonObject.has("target") ? UUID.fromString(jsonObject.get("target").getAsString()) : null;
-            return new CameraOrbitKeyframe(center, distance, yaw, pitch, interpolationType, centreOnTarget, target);
+            boolean smoothFollow = jsonObject.has("lag_behind") && jsonObject.get("lag_behind").getAsBoolean();
+            float lagSeconds = jsonObject.has("lag_seconds") ? jsonObject.get("lag_seconds").getAsFloat() : 0.35f;
+            return new CameraOrbitKeyframe(center, distance, yaw, pitch, interpolationType, centreOnTarget, target,
+                smoothFollow, lagSeconds);
         }
 
         @Override
@@ -205,6 +244,10 @@ public class CameraOrbitKeyframe extends Keyframe {
             }
             if (src.target != null) {
                 jsonObject.addProperty("target", src.target.toString());
+            }
+            if (src.smoothFollow) {
+                jsonObject.addProperty("lag_behind", true);
+                jsonObject.addProperty("lag_seconds", src.lagSeconds);
             }
             jsonObject.addProperty("type", "camera_orbit");
             jsonObject.add("interpolation_type", context.serialize(src.interpolationType()));

@@ -181,6 +181,8 @@ public class Flashback implements ModInitializer, ClientModInitializer {
         InputConstants.Type.KEYBOARD, InputConstants.UNKNOWN.getValue(), category));
     public static final KeyMapping createMarker4KeyBind = KeyMappingHelper.registerKeyMapping(new KeyMapping("flashback.keybind.create_marker_4",
         InputConstants.Type.KEYBOARD, InputConstants.UNKNOWN.getValue(), category));
+    public static final KeyMapping stopSpectatingKeyBind = KeyMappingHelper.registerKeyMapping(new KeyMapping("flashback.keybind.stop_spectating",
+        InputConstants.Type.KEYBOARD, InputConstants.KEY_M, category));
 
     public static final Identifier RECORDING_INFO_DEBUG_SCREEN_ID = createIdentifier("recording_info");
 
@@ -666,6 +668,10 @@ public class Flashback implements ModInitializer, ClientModInitializer {
             }
             if (createMarker4KeyBind.consumeClick()) {
                 addMarker(Flashback.config.marker.markerOptions4);
+            }
+            if (isInReplay() && stopSpectatingKeyBind.consumeClick()) {
+                // Leaving a spectated player is an escape hatch that should not need the editor open.
+                new com.moulberry.flashback.keyframe.handler.MinecraftKeyframeHandler(minecraft).stopSpectating();
             }
         });
 
