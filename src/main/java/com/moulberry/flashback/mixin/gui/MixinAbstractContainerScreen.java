@@ -36,6 +36,13 @@ public class MixinAbstractContainerScreen {
         GuiRecording.screenClosed(screen);
     }
 
+    @Inject(method = "tick()V", at = @At("TAIL"), require = 0)
+    public void onTick(CallbackInfo ci) {
+        // Once a tick, while a container is on screen: writes the changes the client made and the
+        // server never repeated, which is the only place they can be caught.
+        GuiRecording.tick();
+    }
+
     @Inject(method = "slotClicked", at = @At("HEAD"), require = 0)
     public void onSlotClicked(CallbackInfo ci) {
         GuiRecorder.slotClicked((AbstractContainerScreen<?>) (Object) this);

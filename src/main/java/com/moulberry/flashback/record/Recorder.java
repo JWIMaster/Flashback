@@ -868,6 +868,11 @@ public class Recorder {
             return;
         }
 
+        // The recording has to carry what the server never repeats: what the client predicted, and
+        // the kind of container that is open. This runs before the client applies the packet, which
+        // is what makes the difference it sees later exactly the set of changes the server omitted.
+        com.moulberry.flashback.gui.GuiRecording.observePacket(packet);
+
         // Convert player chat packets into system chat packets
         if (packet instanceof ClientboundPlayerChatPacket playerChatPacket) {
             try {
@@ -918,6 +923,9 @@ public class Recorder {
 
         if (asActualSnapshot) {
             this.asyncReplaySaver.submit(ReplayWriter::startSnapshot);
+            // A seek starts from a snapshot, so a recording has to say what was open at one: the
+            // packets that opened it may be behind the snapshot and never played again.
+            com.moulberry.flashback.gui.GuiRecording.onSnapshot();
         }
 
         if (this.lastRtcEpochMilli == 0) {

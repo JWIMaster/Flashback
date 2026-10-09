@@ -504,9 +504,10 @@ public class ReplayGamePacketHandler implements ClientGamePacketListener {
                         // hotbar is the menu's business, not a constant to be guessed at.
                         if (slot >= 0 && slot < inventoryMenu.slots.size()) {
                             net.minecraft.world.inventory.Slot menuSlot = inventoryMenu.getSlot(slot);
+                            int hotbar = menuSlot.getContainerSlot();
                             if (menuSlot.container == player.getInventory()
-                                    && menuSlot.index < replayViewer.lastFirstPersonHotbarItems.length) {
-                                replayViewer.lastFirstPersonHotbarItems[menuSlot.index] = itemStack.copy();
+                                    && hotbar < replayViewer.lastFirstPersonHotbarItems.length) {
+                                replayViewer.lastFirstPersonHotbarItems[hotbar] = itemStack.copy();
                             }
                         }
                         ServerPlayNetworking.send(replayViewer, new FlashbackRemoteSetSlot(player.getId(), slot, itemStack.copy()));

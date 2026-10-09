@@ -36,6 +36,7 @@ public class ContainerGuiCheck {
         noContainerHandlerThrowsOrReachesTheClient(root);
         theOverlayShowsTheGameScreenWithoutTakingOver(root);
         theHooksAreOnTheMethodsThatActuallyRun(root);
+        theRecordingCarriesWhatTheServerNeverRepeats(root);
         theRecordingWritesTheClosesTheServerDoesNot(root);
 
         if (failures > 0) {
@@ -168,6 +169,38 @@ public class ContainerGuiCheck {
             check("every container screen is closed, not only the player's own inventory",
                 closed.contains("AbstractContainerScreen") && !closed.contains("InventoryMenu"));
         }
+    }
+
+    /**
+     * The server never repeats what the client predicted, and it never says what an open container
+     * is between its opening packet and the next one, so both have to be written while recording.
+     *
+     * <p>A click sends the server hashes of every slot the client now believes it has, and the server
+     * records those as already known - so a crafting grid, filled entirely by prediction, is never
+     * sent and a replay had the crafted result sitting beside an empty grid. And a seek starts from a
+     * snapshot, so a container opened before it is never opened again: the recording has to say what
+     * was open at the snapshot or seeking into a container's life shows nothing.
+     */
+    private static void theRecordingCarriesWhatTheServerNeverRepeats(Path root) throws Exception {
+        String recording = Files.readString(root.resolve("com/moulberry/flashback/gui/GuiRecording.java"));
+        check("the recording mirrors the container the client has",
+            recording.contains("ItemStack.matches") && recording.contains("FlashbackRemoteContainer.slot"));
+        check("the mirror is told what the server said",
+            recording.contains("ClientboundContainerSetSlotPacket")
+                && recording.contains("ClientboundContainerSetContentPacket"));
+        check("the recording can name an open container without its opening packet",
+            recording.contains("ClientboundOpenScreenPacket") && recording.contains("restate"));
+
+        String containerScreen = Files.readString(
+            root.resolve("com/moulberry/flashback/mixin/gui/MixinAbstractContainerScreen.java"));
+        check("the mirror is driven once a tick",
+            containerScreen.contains("tick()V") && containerScreen.contains("GuiRecording.tick"));
+
+        String recorder = Files.readString(root.resolve("com/moulberry/flashback/record/Recorder.java"));
+        check("the recorder feeds the mirror every packet",
+            recorder.contains("GuiRecording.observePacket"));
+        check("a snapshot says what was open",
+            recorder.contains("GuiRecording.onSnapshot"));
     }
 
     private static Method handlerFor(Class<?> packetType) {
