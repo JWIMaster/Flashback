@@ -49,6 +49,9 @@ public class MixinRemotePlayer extends AbstractClientPlayer implements RemotePla
     private Vec3 lastPosition = null;
 
     @Unique
+    private boolean firstPersonHandStateInitialized = false;
+
+    @Unique
     private ItemStack mainHandItem = ItemStack.EMPTY;
     @Unique
     private ItemStack offHandItem = ItemStack.EMPTY;
@@ -73,15 +76,21 @@ public class MixinRemotePlayer extends AbstractClientPlayer implements RemotePla
     @Inject(method = "aiStep", at = @At("RETURN"))
     public void aiStep(CallbackInfo ci) {
         if (Flashback.isInReplay()) {
+            this.flashback$initializeFirstPersonHandState();
             if (!this.wasSwinging && this.isSwinging()) {
                 this.resetAttackStrengthTicker();
             }
             this.wasSwinging = this.isSwinging();
 
             this.xBobO = xBob;
-            this.xBob += Mth.wrapDegrees(this.getXRot() - this.xBob) * 0.5f;
-            this.yBobO = yBob;
-            this.yBob += Mth.wrapDegrees(this.getYRot() - this.yBob) * 0.5f;
+            this.xBob += (this.getXRot() - this.xBob) * 0.5f;
+            // The replay's yaw can wrap from +180 to -180 while the smoothed hand yaw
+            // remains near +180. Rebase both animation endpoints into the camera's
+            // current turn before smoothing; otherwise the renderer sees a 360-degree
+            // difference and swings the held item across the screen.
+            float yaw = this.getYRot();
+            this.yBobO = yaw + Mth.wrapDegrees(this.yBob - yaw);
+            this.yBob = this.yBobO + Mth.wrapDegrees(yaw - this.yBobO) * 0.5f;
 
             if (this.lastPosition != null && this.avatarState().getInterpolatedWalkDistance(0) == this.avatarState().getInterpolatedWalkDistance(1)) {
                 double dx = this.lastPosition.x - this.position().x;
@@ -140,6 +149,32 @@ public class MixinRemotePlayer extends AbstractClientPlayer implements RemotePla
     }
 
     @Unique
+    private void flashback$initializeFirstPersonHandState() {
+        if (this.firstPersonHandStateInitialized) {
+            return;
+        }
+
+        // Replay packets periodically destroy and recreate player entities. A new entity's hand
+        // heights start at zero, which the first-person renderer interprets as the hand being fully
+        // lowered; the normal tick animation then raises it over several frames. On an entity
+        // replacement that produces a visible drop toward the centre of the screen. Start the new
+        // instance in the pose it represents now instead of animating in from an unrelated default.
+        this.mainHandItem = this.getMainHandItem();
+        this.offHandItem = this.getOffhandItem();
+        this.mainHandHeight = this.oMainHandHeight = 1.0F;
+        this.offHandHeight = this.oOffHandHeight = 1.0F;
+
+        // These offsets are consumed alongside the current view angles by the hand renderer. Seed
+        // them from this entity's current rotations so a respawn cannot produce a one-time angle
+        // correction from zero.
+        this.xBobO = this.xBob = this.getXRot();
+        this.yBobO = this.yBob = this.getYRot();
+        this.lastPosition = this.position();
+        this.wasSwinging = this.isSwinging();
+        this.firstPersonHandStateInitialized = true;
+    }
+
+    @Unique
     private static boolean shouldInstantlyReplaceVisibleItem(final ItemStack currentlyVisibleItem, final ItemStack expectedItem) {
         if (ItemStack.matchesIgnoringComponents(currentlyVisibleItem, expectedItem, DataComponentType::ignoreSwapAnimation)) {
             return true;
@@ -175,6 +210,7 @@ public class MixinRemotePlayer extends AbstractClientPlayer implements RemotePla
     }
 
     public void flashback$extractFirstPersonHandsAndItems(float partialTicks, FirstPersonHandsAndItemsRenderState state) {
+        this.flashback$initializeFirstPersonHandState();
         Minecraft minecraft = Minecraft.getInstance();
 
         LivingEntity.SwingDescription currentSwing = this.getCurrentSwing();
@@ -182,7 +218,8 @@ public class MixinRemotePlayer extends AbstractClientPlayer implements RemotePla
         state.viewXRot = this.getViewXRot(partialTicks);
         state.viewYRot = this.getViewYRot(partialTicks);
         state.xBob = Mth.lerp(partialTicks, this.xBobO, this.xBob);
-        state.yBob = Mth.lerp(partialTicks, this.yBobO, this.yBob);
+        float bobYaw = Mth.lerp(partialTicks, this.yBobO, this.yBob);
+        state.yBob = state.viewYRot - Mth.wrapDegrees(state.viewYRot - bobYaw);
         state.isScoping = this.isScoping();
         state.useItemRemainingTicks = this.getUseItemRemainingTicks();
         state.handRenderSelection = evaluateWhichHandsToRender(this);

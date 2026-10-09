@@ -42,8 +42,10 @@ public class ContainerGuiCheck {
         aSeekRestoresWhatTheClientCannotRebuild(root);
         theRecordingWritesTheClosesTheServerDoesNot(root);
         aMerchantsTradesReachTheScreen(root);
-        theCameraIsRepairedByPlayerNotById(root);
-
+        theFirstPersonHandNeverChangesPlayer(root);
+        theInterfaceOnlyAppearsThroughAPlayer(root);
+        freshWatchedPlayersStartWithASettledHand(root);
+        handYawStaysOnSameTurnAsCamera(root);
         if (failures > 0) {
             System.out.println("FAILURES: " + failures);
             System.exit(1);
@@ -329,22 +331,107 @@ public class ContainerGuiCheck {
     }
 
     /**
-     * The camera entity is what the first-person hands are drawn from, so pointing it at the wrong
-     * entity shows the wrong player's hands - including their item-use pose - for a tick. A replay
-     * reuses entity ids as it replaces entities, so a removed camera may only be repaired to an
-     * entity that is the same player; the replay's own UUID-based repair does the rest.
+     * The first-person hand belongs to one player for the whole shot. A replay destroys and
+     * recreates the watched entity as it ticks, and both ways of handling that used to change who
+     * the hand belonged to: giving up made the game draw the viewer's hands instead, and a frame
+     * with no instance at all had the same result. So the player is re-resolved by UUID, and a
+     * frame that still cannot find them draws no hand rather than somebody else's.
      */
-    private static void theCameraIsRepairedByPlayerNotById(Path root) throws Exception {
-        String source = Files.readString(root.resolve("com/moulberry/flashback/Flashback.java"));
-        int at = source.indexOf("setCameraEntity(other)");
-        check("the respawn camera repair was found", at >= 0);
-        if (at < 0) {
-            return;
+    private static void theFirstPersonHandNeverChangesPlayer(Path root) throws Exception {
+        String flashback = Files.readString(root.resolve("com/moulberry/flashback/Flashback.java"));
+        String spectating = methodBody(flashback, "getSpectatingPlayer");
+        check("the spectating player lookup was found", spectating != null);
+        if (spectating != null) {
+            check("a replaced spectated player is re-resolved by UUID, not given up on",
+                spectating.contains("getUUID().equals(clientPlayer.getUUID())"));
+            check("the viewer's own camera is still the replay's own viewpoint",
+                spectating.contains("clientPlayer == minecraft.player"));
         }
-        int from = Math.max(0, at - 600);
-        String around = source.substring(from, at);
-        check("a replacement camera entity must be the same player",
-            around.contains("other.getUUID().equals(camera.getUUID())"));
+
+        String extractor = Files.readString(root.resolve("com/moulberry/flashback/mixin/MixinLevelExtractor.java"));
+        String extract = methodBody(extractor, "extractPlayerState");
+        check("the first-person extraction was found", extract != null);
+        if (extract != null) {
+            check("a spectate frame with no live player draws no hand",
+                extract.contains("state.hasPlayer = false"));
+            check("and does not fall through to the viewer's hand",
+                extract.contains("cameraPlayer != Minecraft.getInstance().player"));
+        }
+    }
+
+    /**
+     * The hotbar, the health bar and the first-person hand are readouts of a body, so they belong on
+     * a camera looking through a player and nowhere else. A free or orbit camera keeps the viewer's
+     * own player as the camera entity - the game has no other way to move a camera - so the game
+     * treats it as first person and draws the viewer's own hand and bar into a shot the viewer is
+     * not in.
+     */
+    private static void theInterfaceOnlyAppearsThroughAPlayer(Path root) throws Exception {
+        String display = Files.readString(root.resolve("com/moulberry/flashback/gui/GuiDisplay.java"));
+        check("the interface asks whether it belongs to a player",
+            display.contains("public static boolean showingThroughAPlayer()"));
+
+        String hud = Files.readString(root.resolve("com/moulberry/flashback/mixin/visuals/MixinHud.java"));
+        String hotbar = methodBody(hud, "extractHotbarAndDecorations");
+        check("the hotbar extraction was found", hotbar != null);
+        if (hotbar != null) {
+            check("the hotbar is not drawn on a camera that is not through a player",
+                hotbar.contains("GuiDisplay.showingThroughAPlayer()") && hotbar.contains("ci.cancel()"));
+        }
+
+        String renderer = Files.readString(root.resolve("com/moulberry/flashback/mixin/playback/MixinGameRenderer.java"));
+        String hand = methodBody(renderer, "renderItemInHand_onlyThroughAPlayer");
+        check("the first-person hand is gated as well", hand != null);
+        if (hand != null) {
+            check("and is not drawn on a camera that is not through a player",
+                hand.contains("GuiDisplay.showingThroughAPlayer()") && hand.contains("ci.cancel()"));
+        }
+
+        // The container is the same kind of readout, so it must be gated by the same answer rather
+        // than by a second rule that could drift away from it.
+        check("the container overlay uses the same answer",
+            display.contains("if (!showingThroughAPlayer(minecraft))"));
+    }
+
+    private static void freshWatchedPlayersStartWithASettledHand(Path root) throws Exception {
+        String remotePlayer = Files.readString(root.resolve("com/moulberry/flashback/mixin/playback/MixinRemotePlayer.java"));
+        String initialize = methodBody(remotePlayer, "flashback$initializeFirstPersonHandState");
+        check("the hand state initializer was found", initialize != null);
+        if (initialize != null) {
+            check("new remote-player instances start with their current held items",
+                initialize.contains("this.mainHandItem = this.getMainHandItem()")
+                    && initialize.contains("this.offHandItem = this.getOffhandItem()"));
+            check("new instances do not animate in from a fully-lowered hand pose",
+                initialize.contains("this.mainHandHeight = this.oMainHandHeight = 1.0F")
+                    && initialize.contains("this.offHandHeight = this.oOffHandHeight = 1.0F"));
+            check("view-angle offsets are seeded instead of starting at zero",
+                initialize.contains("this.xBobO = this.xBob = this.getXRot()")
+                    && initialize.contains("this.yBobO = this.yBob = this.getYRot()"));
+        }
+
+        String extract = methodBody(remotePlayer, "flashback$extractFirstPersonHandsAndItems");
+        check("hand state initializes before first render-state extraction",
+            extract != null && extract.contains("this.flashback$initializeFirstPersonHandState()"));
+    }
+
+    private static void handYawStaysOnSameTurnAsCamera(Path root) throws Exception {
+        String source = Files.readString(root.resolve("com/moulberry/flashback/mixin/playback/MixinRemotePlayer.java"));
+        check("hand yaw animation rebases across the 180-degree seam",
+            source.contains("this.yBobO = yaw + Mth.wrapDegrees(this.yBob - yaw)"));
+        String extraction = methodBody(source, "flashback$extractFirstPersonHandsAndItems");
+        check("rendered hand yaw stays on the camera's current turn",
+            extraction != null && extraction.contains("state.yBob = state.viewYRot - Mth.wrapDegrees(state.viewYRot - bobYaw)"));
+        // A wrapped player yaw of -179 and a hand yaw of +179 are two degrees apart,
+        // not 358 degrees apart. The hand renderer rotates by one tenth of this delta.
+        check("crossing the yaw seam keeps the hand's rotation below one degree",
+            Math.abs(wrapDegrees(-179.0f - 179.0f) * 0.1f) < 1.0f);
+    }
+
+    private static float wrapDegrees(float degrees) {
+        float wrapped = degrees % 360.0f;
+        if (wrapped >= 180.0f) wrapped -= 360.0f;
+        if (wrapped < -180.0f) wrapped += 360.0f;
+        return wrapped;
     }
 
     private static Method handlerFor(Class<?> packetType) {

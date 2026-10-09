@@ -6,6 +6,7 @@ import com.moulberry.flashback.keyframe.handler.KeyframeHandler;
 import com.moulberry.flashback.keyframe.impl.CameraOrbitKeyframe;
 import com.moulberry.flashback.keyframe.interpolation.InterpolationType;
 import org.joml.Vector3d;
+import java.util.UUID;
 
 /**
  * The orbit camera's two meanings: around a fixed point, or around the subject it follows.
@@ -85,16 +86,16 @@ public class OrbitTest {
             Math.abs(recorder.position.z - (fixedPoint.z - 10)) < 0.001
                 && Math.abs(recorder.position.x - fixedPoint.x) < 0.001);
 
-        // With nothing tracked, the subject is the player: this is the case the user hit, and it is
-        // what makes an orbit camera turn around someone who walks about.
+        // The local player is the moving camera, not the subject. Centring on it every
+        // frame sent the camera backwards by the distance on every update.
         Recorder playerOnly = new Recorder();
         playerOnly.subject = subject;
         CameraOrbitKeyframe onPlayer = new CameraOrbitKeyframe(fixedPoint, 10f, 0f, 0f,
             InterpolationType.getDefault(), true);
         onPlayer.createChange().apply(playerOnly);
-        check("with nothing tracked, the orbit centres on the player",
-            Math.abs(playerOnly.position.z - (subject.z - 10)) < 0.001
-                && Math.abs(playerOnly.position.x - subject.x) < 0.001);
+        check("without a selected or tracked subject, orbit does not chase its own camera",
+            Math.abs(playerOnly.position.z - (fixedPoint.z - 10)) < 0.001
+                && Math.abs(playerOnly.position.x - fixedPoint.x) < 0.001);
 
         // And when even the player cannot be found, it must keep the stored point rather than
         // collapsing to the world origin.
@@ -116,6 +117,11 @@ public class OrbitTest {
         // Copying and interpolating must carry the choice, or the camera would silently anchor.
         CameraOrbitKeyframe copy = (CameraOrbitKeyframe) following.copy();
         check("copying keeps the choice", copy.centreOnTarget);
+        UUID playerId = UUID.randomUUID();
+        CameraOrbitKeyframe selected = new CameraOrbitKeyframe(fixedPoint, 10f, 0f, 0f,
+            InterpolationType.getDefault(), true, playerId);
+        check("copying keeps the selected player", playerId.equals(((CameraOrbitKeyframe) selected.copy()).target));
+        check("applying keeps the selected player", playerId.equals(((KeyframeChangeCameraPositionOrbit) selected.createChange()).target()));
         KeyframeChange interpolated = following.createChange().interpolate(anchored.createChange(), 0.5);
         check("interpolating keeps the choice", ((KeyframeChangeCameraPositionOrbit) interpolated).centreOnTarget());
 

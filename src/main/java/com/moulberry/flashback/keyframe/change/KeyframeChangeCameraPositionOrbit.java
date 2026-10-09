@@ -4,15 +4,21 @@ import com.moulberry.flashback.Interpolation;
 import com.moulberry.flashback.keyframe.handler.KeyframeHandler;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.world.entity.Entity;
+import java.util.UUID;
 import net.minecraft.util.Mth;
 import net.minecraft.world.phys.Vec3;
 import org.joml.Vector3d;
 
 public record KeyframeChangeCameraPositionOrbit(Vector3d center, double distance, double yaw, double pitch,
-                                               boolean centreOnTarget) implements KeyframeChange {
+                                               boolean centreOnTarget, UUID target) implements KeyframeChange {
 
     public KeyframeChangeCameraPositionOrbit(Vector3d center, double distance, double yaw, double pitch) {
-        this(center, distance, yaw, pitch, false);
+        this(center, distance, yaw, pitch, false, null);
+    }
+
+    public KeyframeChangeCameraPositionOrbit(Vector3d center, double distance, double yaw, double pitch, boolean centreOnTarget) {
+        this(center, distance, yaw, pitch, centreOnTarget, null);
     }
 
     @Override
@@ -26,16 +32,20 @@ public record KeyframeChangeCameraPositionOrbit(Vector3d center, double distance
 
         Vector3d centre = this.center;
         if (this.centreOnTarget) {
-            Vector3d followed = keyframeHandler.followedPosition();
-            if (followed != null) {
-                centre = followed;
-            } else {
-                // Nothing is being tracked, so the subject is the player themselves.
-                Vector3d subject = keyframeHandler.subjectPosition();
-                if (subject != null) {
-                    centre = subject;
+            if (this.target != null && minecraft != null && minecraft.level != null) {
+                Entity subject = minecraft.level.getEntities().get(this.target);
+                if (subject != null && subject != player) {
+                    Vec3 eye = subject.getEyePosition(minecraft.deltaTracker.getGameTimeDeltaPartialTick(true));
+                    centre = new Vector3d(eye.x, eye.y, eye.z);
+                }
+            } else if (this.target == null) {
+                Vector3d followed = keyframeHandler.followedPosition();
+                if (followed != null) {
+                    centre = followed;
                 }
             }
+            // Never use the local player as the centre: it IS the replay camera.
+            // If the selected player is temporarily absent, hold the saved point.
         }
 
         float pitchRadians = (float) Math.toRadians(this.pitch);
@@ -61,7 +71,8 @@ public record KeyframeChangeCameraPositionOrbit(Vector3d center, double distance
             Interpolation.linear(this.distance, other.distance, amount),
             Interpolation.linear(this.yaw, other.yaw, amount),
             Interpolation.linear(this.pitch, other.pitch, amount),
-            this.centreOnTarget
+            this.centreOnTarget,
+            amount < 0.5 ? this.target : other.target
         );
     }
 }

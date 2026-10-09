@@ -94,7 +94,7 @@ public class SpectateKeyframeType implements KeyframeType<SpectateKeyframe> {
     }
 
     /** Players in the replay, name-ordered so the list is stable. */
-    private static List<Player> availablePlayers() {
+    public static List<Player> availablePlayers() {
         ClientLevel level = Minecraft.getInstance().level;
         if (level == null) {
             return List.of();

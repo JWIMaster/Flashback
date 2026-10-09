@@ -10,6 +10,9 @@ import com.moulberry.flashback.keyframe.change.KeyframeChangeCameraPositionOrbit
 import com.moulberry.flashback.keyframe.handler.KeyframeHandler;
 import com.moulberry.flashback.keyframe.impl.CameraKeyframe;
 import com.moulberry.flashback.keyframe.impl.CameraOrbitKeyframe;
+import com.moulberry.flashback.state.CameraSourceDisplay;
+import net.minecraft.world.entity.player.Player;
+import java.util.UUID;
 import com.moulberry.flashback.keyframe.interpolation.InterpolationType;
 import imgui.moulberry90.ImGui;
 import imgui.moulberry90.type.ImBoolean;
@@ -84,22 +87,42 @@ public class CameraOrbitKeyframeType implements KeyframeType<CameraOrbitKeyframe
        cameraOrbitCenter[1] = (float) subject.y;
        cameraOrbitCenter[2] = (float) subject.z;
        ImBoolean centreOnTarget = new ImBoolean(true);
+        UUID[] selectedTarget = {null};
 
         return () -> {
             ImGui.checkbox(I18n.get("flashback.orbit_centre_on_player"), centreOnTarget);
             ImGuiHelper.tooltip(I18n.get("flashback.orbit_centre_on_player_hint"));
-            if (!centreOnTarget.get()) {
-                // A fixed point is only a choice when it is not following the player.
+            if (centreOnTarget.get()) {
+                if (ImGui.beginCombo(I18n.get("flashback.keyframe.spectate"),
+                    selectedTarget[0] == null ? I18n.get("flashback.no_players_available") : CameraSourceDisplay.describePlayer(selectedTarget[0]))) {
+                    for (Player playerOption : SpectateKeyframeType.availablePlayers()) {
+                        if (playerOption != Minecraft.getInstance().player &&
+                            ImGui.selectable(playerOption.getName().getString() + "##orbit_new_" + playerOption.getUUID(),
+                                playerOption.getUUID().equals(selectedTarget[0]))) {
+                            selectedTarget[0] = playerOption.getUUID();
+                            Vec3 eye = playerOption.getEyePosition();
+                            cameraOrbitCenter[0] = (float) eye.x;
+                            cameraOrbitCenter[1] = (float) eye.y;
+                            cameraOrbitCenter[2] = (float) eye.z;
+                        }
+                    }
+                    ImGui.endCombo();
+                }
+            } else {
                 ImGuiHelper.inputFloat(I18n.get("flashback.position"), cameraOrbitCenter);
             }
             ImGuiHelper.inputFloat(I18n.get("flashback.distance"), cameraOrbitDistance);
             ImGuiHelper.inputFloat(I18n.get("flashback.yaw"), cameraOrbitYaw);
             ImGuiHelper.inputFloat(I18n.get("flashback.pitch"), cameraOrbitPitch);
 
-            if (ImGui.button(I18n.get("flashback.add")) || ReplayUI.consumeConfirm()) {
+            boolean needsTarget = centreOnTarget.get() && selectedTarget[0] == null;
+            if (needsTarget) ImGui.beginDisabled();
+            boolean add = ImGui.button(I18n.get("flashback.add"));
+            if (needsTarget) ImGui.endDisabled();
+            if (!needsTarget && (add || ReplayUI.consumeConfirm())) {
                 Vector3d center = new Vector3d(cameraOrbitCenter[0], cameraOrbitCenter[1], cameraOrbitCenter[2]);
                 return new CameraOrbitKeyframe(center, cameraOrbitDistance[0], cameraOrbitYaw[0], cameraOrbitPitch[0],
-                    InterpolationType.getDefault(), centreOnTarget.get());
+                    InterpolationType.getDefault(), centreOnTarget.get(), centreOnTarget.get() ? selectedTarget[0] : null);
             }
             ImGui.sameLine();
             if (ImGui.button(I18n.get("gui.cancel")) || ReplayUI.consumeCancel()) {

@@ -385,6 +385,19 @@ public final class GuiDisplay {
         return minecraft.level.getEntity(replayServer.getLocalPlayerId()) instanceof Player player ? player : null;
     }
 
+    /**
+     * Whether the interface on screen belongs to a player at all.
+     *
+     * <p>The hotbar, the health bar and the container are readouts of somebody's body, so they only
+     * make sense on a camera that is looking through a player's eyes - the recorded player's or,
+     * while spectating, whoever is being watched. On a free or orbit camera there is nobody whose
+     * interface this could be, and drawing one there describes a person the shot is not about.
+     */
+    public static boolean showingThroughAPlayer() {
+        Minecraft minecraft = Minecraft.getInstance();
+        return minecraft != null && showingThroughAPlayer(minecraft);
+    }
+
     private static boolean showingThroughAPlayer(Minecraft minecraft) {
         if (shotIsSpectate()) {
             return true;

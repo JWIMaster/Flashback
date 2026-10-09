@@ -135,6 +135,13 @@ public abstract class MixinHud {
 
     @Inject(method = "extractHotbarAndDecorations", at = @At("HEAD"), cancellable = true, require = 0)
     public void extractHotbarAndDecorations(GuiGraphicsExtractor guiGraphics, DeltaTracker deltaTracker, CallbackInfo ci) {
+        // The hotbar, the health and the hunger are readouts of a body, and on a camera that is not
+        // looking through a player there is no body they could belong to. Drawing them there says
+        // the shot is about somebody it is not - a free or orbit camera has no hotbar.
+        if (Flashback.isInReplay() && !GuiDisplay.showingThroughAPlayer()) {
+            ci.cancel();
+            return;
+        }
         if (this.shouldHideElements) {
             EditorState editorState = EditorStateManager.getCurrent();
             if (editorState != null && !editorState.replayVisuals.showHotbar) {

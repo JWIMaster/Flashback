@@ -3,6 +3,7 @@ package com.moulberry.flashback.mixin.playback;
 import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
 import com.moulberry.flashback.Flashback;
+import com.moulberry.flashback.gui.GuiDisplay;
 import com.moulberry.flashback.state.EditorState;
 import com.moulberry.flashback.state.EditorStateManager;
 import net.minecraft.client.CloudStatus;
@@ -41,6 +42,22 @@ public abstract class MixinGameRenderer {
     @Inject(method = "render", at = @At(value = "INVOKE", target = "Lcom/mojang/renderpearl/api/commands/CommandEncoder;clearDepthTexture(Lcom/mojang/renderpearl/api/textures/GpuTexture;D)V", remap = false, ordinal = 0), cancellable = true)
     public void render_noGui(CallbackInfo ci) {
         if (Flashback.isExporting() && Flashback.EXPORT_JOB.getSettings().noGui()) {
+            ci.cancel();
+        }
+    }
+
+    /**
+     * Keeps first-person hands off cameras that are not looking through a player.
+     *
+     * <p>A replay's free and orbit cameras keep the viewer's own player as the camera entity, because
+     * the game has no other way to move a camera about, so the game treats them as first person and
+     * draws the viewer's hand in the middle of a shot the viewer is not in. That hand belongs to the
+     * person watching rather than to the recording, which is why it appeared and vanished as the
+     * timeline crossed between camera keyframes.
+     */
+    @Inject(method = "renderItemInHand", at = @At("HEAD"), cancellable = true, require = 0)
+    public void renderItemInHand_onlyThroughAPlayer(CallbackInfo ci) {
+        if (Flashback.isInReplay() && !GuiDisplay.showingThroughAPlayer()) {
             ci.cancel();
         }
     }

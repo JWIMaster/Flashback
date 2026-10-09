@@ -22,6 +22,11 @@ import org.joml.Vector3d;
 
 import java.lang.reflect.Type;
 import java.util.Map;
+import java.util.UUID;
+import net.minecraft.client.Minecraft;
+import net.minecraft.world.entity.player.Player;
+import com.moulberry.flashback.state.CameraSourceDisplay;
+import com.moulberry.flashback.keyframe.types.SpectateKeyframeType;
 import imgui.moulberry90.ImGui;
 import imgui.moulberry90.type.ImBoolean;
 
@@ -38,6 +43,7 @@ public class CameraOrbitKeyframe extends Keyframe {
      * point. Absent from older projects, where an orbit was always around a fixed point.
      */
     public boolean centreOnTarget;
+    public UUID target;
 
     public CameraOrbitKeyframe(Vector3d center, float distance, float yaw, float pitch) {
         this(center, distance, yaw, pitch, InterpolationType.getDefault());
@@ -49,6 +55,12 @@ public class CameraOrbitKeyframe extends Keyframe {
 
     public CameraOrbitKeyframe(Vector3d center, float distance, float yaw, float pitch,
                                InterpolationType interpolationType, boolean centreOnTarget) {
+        this(center, distance, yaw, pitch, interpolationType, centreOnTarget, null);
+    }
+
+    public CameraOrbitKeyframe(Vector3d center, float distance, float yaw, float pitch,
+                               InterpolationType interpolationType, boolean centreOnTarget, UUID target) {
+        this.target = target;
         this.center = center;
         this.distance = distance;
         this.yaw = yaw;
@@ -65,7 +77,7 @@ public class CameraOrbitKeyframe extends Keyframe {
     @Override
     public Keyframe copy() {
         return new CameraOrbitKeyframe(new Vector3d(this.center), this.distance, this.yaw, this.pitch,
-            this.interpolationType(), this.centreOnTarget);
+            this.interpolationType(), this.centreOnTarget, this.target);
     }
 
     @Override
@@ -76,6 +88,19 @@ public class CameraOrbitKeyframe extends Keyframe {
             update.accept(keyframe -> ((CameraOrbitKeyframe) keyframe).centreOnTarget = value);
         }
         ImGuiHelper.tooltip(I18n.get("flashback.orbit_centre_on_player_hint"));
+        if (this.centreOnTarget) {
+            if (ImGui.beginCombo(I18n.get("flashback.keyframe.spectate"),
+                this.target == null ? I18n.get("flashback.no_players_available") : CameraSourceDisplay.describePlayer(this.target))) {
+                for (Player subject : SpectateKeyframeType.availablePlayers()) {
+                    if (subject != Minecraft.getInstance().player &&
+                        ImGui.selectable(subject.getName().getString() + "##orbit_edit_" + subject.getUUID(), subject.getUUID().equals(this.target))) {
+                        UUID selected = subject.getUUID();
+                        update.accept(keyframe -> ((CameraOrbitKeyframe) keyframe).target = selected);
+                    }
+                }
+                ImGui.endCombo();
+            }
+        }
 
         float[] center = new float[]{(float) this.center.x, (float) this.center.y, (float) this.center.z};
         if (!this.centreOnTarget && ImGuiHelper.inputFloat(I18n.get("flashback.position"), center)) {
@@ -110,13 +135,13 @@ public class CameraOrbitKeyframe extends Keyframe {
     }
 
     private static KeyframeChangeCameraPositionOrbit createChangeFrom(Vector3d center, float distance, float yaw,
-                                                                    float pitch, boolean centreOnTarget) {
-        return new KeyframeChangeCameraPositionOrbit(center, distance, yaw, pitch, centreOnTarget);
+                                                                    float pitch, boolean centreOnTarget, UUID target) {
+        return new KeyframeChangeCameraPositionOrbit(center, distance, yaw, pitch, centreOnTarget, target);
     }
 
     @Override
     public KeyframeChange createChange() {
-        return createChangeFrom(this.center, this.distance, this.yaw, this.pitch, this.centreOnTarget);
+        return createChangeFrom(this.center, this.distance, this.yaw, this.pitch, this.centreOnTarget, this.target);
     }
 
     @Override
@@ -138,7 +163,7 @@ public class CameraOrbitKeyframe extends Keyframe {
         float pitch = CatmullRom.value(this.pitch, ((CameraOrbitKeyframe)p1).pitch, ((CameraOrbitKeyframe)p2).pitch,
                 ((CameraOrbitKeyframe)p3).pitch, time1, time2, time3, amount);
 
-        return createChangeFrom(position, distance, yaw, pitch, this.centreOnTarget);
+        return createChangeFrom(position, distance, yaw, pitch, this.centreOnTarget, this.target);
     }
 
     @Override
@@ -150,7 +175,7 @@ public class CameraOrbitKeyframe extends Keyframe {
         double yaw = Hermite.value(Maps.transformValues(keyframes, k -> (double) ((CameraOrbitKeyframe)k).yaw), amount);
         double pitch = Hermite.value(Maps.transformValues(keyframes, k -> (double) ((CameraOrbitKeyframe)k).pitch), amount);
 
-        return createChangeFrom(position, (float) distance, (float) yaw, (float) pitch, this.centreOnTarget);
+        return createChangeFrom(position, (float) distance, (float) yaw, (float) pitch, this.centreOnTarget, this.target);
     }
 
     public static class TypeAdapter implements JsonSerializer<CameraOrbitKeyframe>, JsonDeserializer<CameraOrbitKeyframe> {
@@ -163,7 +188,8 @@ public class CameraOrbitKeyframe extends Keyframe {
             float pitch = jsonObject.get("pitch").getAsFloat();
             InterpolationType interpolationType = context.deserialize(jsonObject.get("interpolation_type"), InterpolationType.class);
             boolean centreOnTarget = jsonObject.has("centre_on_target") && jsonObject.get("centre_on_target").getAsBoolean();
-            return new CameraOrbitKeyframe(center, distance, yaw, pitch, interpolationType, centreOnTarget);
+            UUID target = jsonObject.has("target") ? UUID.fromString(jsonObject.get("target").getAsString()) : null;
+            return new CameraOrbitKeyframe(center, distance, yaw, pitch, interpolationType, centreOnTarget, target);
         }
 
         @Override
@@ -176,6 +202,9 @@ public class CameraOrbitKeyframe extends Keyframe {
             if (src.centreOnTarget) {
                 // Only written when set, so projects that predate it stay byte-for-byte familiar.
                 jsonObject.addProperty("centre_on_target", true);
+            }
+            if (src.target != null) {
+                jsonObject.addProperty("target", src.target.toString());
             }
             jsonObject.addProperty("type", "camera_orbit");
             jsonObject.add("interpolation_type", context.serialize(src.interpolationType()));

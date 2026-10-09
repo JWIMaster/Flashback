@@ -63,7 +63,22 @@ public abstract class MixinLevelExtractor {
     @Inject(method = "extractPlayerState", at = @At("HEAD"), cancellable = true)
     public void extractPlayerState(Camera camera, DeltaTracker deltaTracker, float worldPartialTicks, PlayerRenderState state, CallbackInfo ci) {
         AbstractClientPlayer player = Flashback.getSpectatingPlayer();
-        if (player == null || this.level == null) {
+        if (player == null) {
+            // The camera is still attached to a player who is not the viewer, so the first-person
+            // hand for this frame is theirs - but the replay is midway through replacing that
+            // entity and no live instance of them exists yet. Letting this fall through to the
+            // game's own extraction fills the hand in from the viewer instead, who is a different
+            // person holding different things, which is what made the hand jump about during a
+            // shot. Drawing no hand for the frame is the honest answer until they are back.
+            if (this.level != null && Minecraft.getInstance().getCameraEntity() instanceof AbstractClientPlayer cameraPlayer
+                && cameraPlayer != Minecraft.getInstance().player) {
+                ci.cancel();
+                state.reset();
+                state.hasPlayer = false;
+            }
+            return;
+        }
+        if (this.level == null) {
             return;
         }
 

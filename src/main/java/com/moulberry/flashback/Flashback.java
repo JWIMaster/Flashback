@@ -582,12 +582,7 @@ public class Flashback implements ModInitializer, ClientModInitializer {
             if (player != null && camera != null && camera != player) {
                 if (camera.isRemoved()) {
                     Entity other = player.level().getEntity(camera.getId());
-                    // A replay destroys and recreates its entities, so an id can belong to a
-                    // different entity by the time this runs. Adopting it would point the camera -
-                    // and with it the first-person hands - at the wrong player for a tick until the
-                    // replay's own UUID-based repair catches up. Only a same-UUID replacement is the
-                    // respawn this is for; anything else is left for that repair.
-                    if (other != null && !other.isRemoved() && other.getUUID().equals(camera.getUUID())) {
+                    if (other != null && !other.isRemoved()) {
                         Minecraft.getInstance().setCameraEntity(other);
                     }
                 }
@@ -1175,13 +1170,32 @@ public class Flashback implements ModInitializer, ClientModInitializer {
             return null;
         }
         Minecraft minecraft = Minecraft.getInstance();
-        if (minecraft.getCameraEntity() instanceof AbstractClientPlayer clientPlayer) {
-            // The camera must point at a live player in the level currently being rendered. A replay
-            // replaces its entities as it ticks, so the camera can briefly point at an instance that
-            // has already been discarded; treating that as "not spectating" is better than rendering
-            // a ghost until the server's repair pass catches up.
-            if (clientPlayer != minecraft.player && !clientPlayer.isRemoved() && clientPlayer.level() == minecraft.level) {
-                return clientPlayer;
+        if (!(minecraft.getCameraEntity() instanceof AbstractClientPlayer clientPlayer)) {
+            return null;
+        }
+        if (clientPlayer == minecraft.player) {
+            // The camera is the viewer: this is the replay's own viewpoint, and the game's ordinary
+            // first-person rendering is the right answer for it.
+            return null;
+        }
+        if (!clientPlayer.isRemoved() && clientPlayer.level() == minecraft.level) {
+            return clientPlayer;
+        }
+
+        // The camera is attached to a player the replay has since replaced. Giving up here is what
+        // made the first-person hand jump: with no spectated player, the frame is extracted by the
+        // game's own code, from the viewer - who holds nothing and is posed differently - so for
+        // that frame the hand belonged to somebody else entirely and then snapped back.
+        //
+        // The camera follows an entity instance, but the player being watched is a person, and their
+        // replacement is the same UUID. Following that instead keeps the hand on one player for the
+        // whole shot, across every entity the replay destroys and recreates underneath it.
+        if (minecraft.level != null) {
+            for (AbstractClientPlayer candidate : minecraft.level.players()) {
+                if (candidate != minecraft.player && candidate.getUUID().equals(clientPlayer.getUUID())
+                    && !candidate.isRemoved()) {
+                    return candidate;
+                }
             }
         }
         return null;
