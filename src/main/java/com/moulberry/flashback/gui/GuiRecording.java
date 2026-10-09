@@ -16,6 +16,7 @@ import net.minecraft.network.protocol.game.ClientboundContainerSetSlotPacket;
 import net.minecraft.network.protocol.game.ClientboundMountScreenOpenPacket;
 import net.minecraft.network.protocol.game.ClientboundOpenScreenPacket;
 import net.minecraft.resources.Identifier;
+import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.inventory.AbstractContainerMenu;
 import net.minecraft.world.inventory.CraftingContainer;
 import net.minecraft.world.inventory.InventoryMenu;
@@ -178,21 +179,27 @@ public final class GuiRecording {
     /**
      * Writes the crafting grid the client has and the server has not said.
      *
-     * <p>Only the grid. It is the one part of a container that is filled entirely by prediction: a
-     * click sends the server a hash of what the client now believes, the server files it as already
-     * known, and the slots are never sent. Everything else in a container is the server's, and it
-     * describes its own changes - writing this side's view of those as well would put the client's
-     * guess where the server's answer belongs, which is exactly what makes a chest look wrong.
+     * <p>Only the slots the player owns. Their crafting grid and their own inventory are filled by
+     * prediction: a click sends the server a hash of what the client now believes, the server files
+     * it as already known, and the slots are never sent. That covers more than the grid - mining is
+     * server-side, but moving what you mined into a crafting grid, and the grid's own contents, are
+     * not, so without this the logs stay in the hotbar for the rest of the recording. A container's
+     * own slots are the server's and it describes its own changes, so writing this side's view of
+     * those would put a guess where the server's answer belongs, which is what a chest looking wrong
+     * was.
      *
-     * <p>Recognised by the container behind the slot rather than by slot number, because a furnace
-     * and a crafting table put the grid in different places and a hard-coded range would eventually
+     * <p>Decided by which container is behind the slot rather than by slot number: a furnace and a
+     * crafting table put the grid in different places, and a hard-coded range would eventually
      * describe the wrong slot in one of them.
      */
     private static void writeDifferences(AbstractContainerMenu menu) {
+        Minecraft minecraft = Minecraft.getInstance();
+        Inventory own = minecraft == null || minecraft.player == null ? null : minecraft.player.getInventory();
+
         int slots = Math.min(menu.slots.size(), mirrored.size());
         for (int i = 0; i < slots; i++) {
             Slot slot = menu.getSlot(i);
-            if (!(slot.container instanceof CraftingContainer)) {
+            if (own == null || (slot.container != own && !(slot.container instanceof CraftingContainer))) {
                 continue;
             }
             ItemStack now = slot.getItem();
