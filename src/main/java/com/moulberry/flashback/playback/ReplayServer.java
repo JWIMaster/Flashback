@@ -1023,15 +1023,21 @@ public class ReplayServer extends IntegratedServer {
 
         // Update current tick
         boolean normalPlayback = false;
+        int tickBeforeJump = this.getReplayTick();
         if (this.jumpToTick >= 0) {
             this.targetTick = this.jumpToTick;
             this.jumpToTick = -1;
-            // A jump forwards skips over packets without playing them, so whatever container the
-            // recording had open may never be closed by one. Take it down here, in the recording's
-            // own order, rather than leaving the viewer looking at a container from a tick that is
-            // no longer playing.
-            GuiDisplayForwarder.reset(this);
-            this.endOfReplayResetSent = false;
+
+            // Only a jump that skips ticks needs the interface taken down. A jump forwards skips over
+            // packets without playing them, so whatever container the recording had open may never be
+            // closed by one - but an export advances the tick one at a time, every frame, and taking
+            // the interface down for each of those cleared it before anything could appear in it.
+            // That is why the chest was missing from every exported frame and present while playing.
+            boolean skippedTicks = Math.abs(this.targetTick - tickBeforeJump) > 1;
+            if (skippedTicks) {
+                GuiDisplayForwarder.reset(this);
+                this.endOfReplayResetSent = false;
+            }
 
             // A crack belongs to the tick it was sent for, and a jump does not replay the packet that
             // would have stopped it, so the client is told to take them all down. The first-person
@@ -1120,7 +1126,12 @@ public class ReplayServer extends IntegratedServer {
                 ? cameraPlayer : this.recordedPlayer();
             if (playerCamera != null) {
                 Inventory inventory = playerCamera.getInventory();
-                boolean resend = replayViewer.resendFirstPersonTicks > 0;
+                // Re-sent in full once a second as well as after a jump. The record of what the
+                // client has is only ever updated when something is sent, so a payload that went
+                // missing - an entity the client did not have yet, say - otherwise stays missing for
+                // good and the bar drifts. An export never sees this because it re-sends every frame;
+                // this is what makes plain playback behave the same way.
+                boolean resend = replayViewer.resendFirstPersonTicks > 0 || this.getReplayTick() % 20 == 0;
                 if (resend) {
                     replayViewer.resendFirstPersonTicks -= 1;
                 }
