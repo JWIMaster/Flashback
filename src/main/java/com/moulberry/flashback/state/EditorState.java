@@ -67,6 +67,15 @@ public class EditorState {
     public double zoomMax = 1.0;
 
     /**
+     * Replay ticks cut out of the edit, in order.
+     *
+     * <p>Cutting never touches the replay: this is a note in the project that a stretch should not be
+     * played or exported, so the ticks either side of it run together. Absent from projects written
+     * before cuts existed, where the field's initialiser leaves it empty.
+     */
+    public List<TimelineCut> cuts = new ArrayList<>();
+
+    /**
      * How wide the timeline's row list is, or 0 to size it to the window.
      *
      * <p>A view preference, stored with the project for the same reason the zoom is: it is part of
@@ -112,7 +121,6 @@ public class EditorState {
     public long acquireRead() {
         return this.sceneLock.readLock();
     }
-
     @ApiStatus.Internal
     public long acquireWrite() {
         return this.sceneLock.writeLock();
@@ -182,6 +190,192 @@ public class EditorState {
     public void markDirty() {
         this.dirty = true;
         this.modCount += 1;
+    }
+
+    /**
+     * Cuts a stretch of ticks out of the edit, merging it into any cut it touches.
+     *
+     * <p>Merging rather than storing neighbours separately keeps one stretch of removed replay as one
+     * cut, so the timeline draws one region and removing it once puts everything back.
+     *
+     * @return the cut that now covers the range, or null when the range was empty
+     */
+    public @Nullable TimelineCut addCut(int from, int to) {
+        int start = Math.min(from, to);
+        int end = Math.max(from, to);
+        if (start == end) {
+            return null;
+        }
+
+        TimelineCut added = new TimelineCut(start, end);
+        List<TimelineCut> remaining = new ArrayList<>();
+        for (TimelineCut existing : this.normalisedCuts()) {
+            if (existing.touches(added)) {
+                added = new TimelineCut(Math.min(added.start, existing.start), Math.max(added.end, existing.end));
+            } else {
+                remaining.add(existing);
+            }
+        }
+        remaining.add(added);
+        remaining.sort(Comparator.comparingInt(cut -> cut.start));
+        this.cuts = remaining;
+        this.markDirty();
+        return added;
+    }
+
+    /**
+     * Replaces the cuts wholesale, which is what undoing a cut edit needs.
+     *
+     * <p>Recording a whole list rather than one change keeps undo exact even when the edit merged two
+     * cuts into one or split one in two.
+     */
+    public void setCuts(List<TimelineCut> cuts) {
+        this.cuts = cuts == null ? new ArrayList<>() : new ArrayList<>(cuts);
+        this.markDirty();
+    }
+
+    /** Puts a cut stretch back into the edit. */
+    public void removeCut(TimelineCut cut) {
+        if (this.cuts != null && this.cuts.remove(cut)) {
+            this.markDirty();
+        }
+    }
+
+    /**
+     * Puts a stretch of ticks back into the edit, splitting any cut it sits inside.
+     *
+     * <p>Restoring part of a cut rather than all of it is what makes the tool usable on a long cut
+     * that was only slightly too greedy: the rest of the cut stays removed.
+     */
+    public void restoreRange(int from, int to) {
+        int start = Math.min(from, to);
+        int end = Math.max(from, to);
+        if (start == end) {
+            return;
+        }
+
+        List<TimelineCut> remaining = new ArrayList<>();
+        boolean changed = false;
+        for (TimelineCut cut : this.normalisedCuts()) {
+            if (cut.end <= start || cut.start >= end) {
+                remaining.add(cut);
+                continue;
+            }
+            changed = true;
+            if (cut.start < start) {
+                remaining.add(new TimelineCut(cut.start, start));
+            }
+            if (cut.end > end) {
+                remaining.add(new TimelineCut(end, cut.end));
+            }
+        }
+        if (changed) {
+            this.cuts = remaining;
+            this.markDirty();
+        }
+    }
+
+    /** The cut covering this tick, or null when the tick is kept. */
+    public @Nullable TimelineCut cutAt(int tick) {
+        for (TimelineCut cut : this.normalisedCuts()) {
+            if (cut.contains(tick)) {
+                return cut;
+            }
+        }
+        return null;
+    }
+
+    /** Whether this tick is inside a cut, and so is neither played nor exported. */
+    public boolean isCut(int tick) {
+        return this.cutAt(tick) != null;
+    }
+
+    /**
+     * The first tick at or after {@code tick} that survives the cuts.
+     *
+     * <p>Playback uses this to step over removed stretches, so a cut is skipped rather than shown.
+     */
+    public int nextKeptTick(int tick) {
+        int result = Math.max(0, tick);
+        boolean moved = true;
+        while (moved) {
+            moved = false;
+            for (TimelineCut cut : this.normalisedCuts()) {
+                if (cut.contains(result)) {
+                    result = cut.end;
+                    moved = true;
+                }
+            }
+        }
+        return result;
+    }
+
+    /** How many ticks the cuts remove from the replay before {@code tick}. */
+    public double removedBefore(double tick) {
+        double removed = 0;
+        for (TimelineCut cut : this.normalisedCuts()) {
+            if (tick <= cut.start) {
+                break;
+            }
+            removed += Math.min(tick, cut.end) - cut.start;
+        }
+        return removed;
+    }
+
+    /** Maps a tick in the replay onto the shorter timeline the cuts leave behind. */
+    public double keptTick(double tick) {
+        return tick - this.removedBefore(tick);
+    }
+
+    /** How long the replay runs once the cuts are removed. */
+    public double keptLength(int totalTicks) {
+        return this.keptTick(totalTicks);
+    }
+
+    /**
+     * The cuts in order, with overlaps merged and empty ones dropped.
+     *
+     * <p>Saved projects are trusted but not assumed: a hand-edited file or one written by a future
+     * build could hold overlapping cuts, and every reader here relies on them being disjoint and
+     * ordered. A project with no cuts keeps the list it already has, so this stays cheap.
+     */
+    public List<TimelineCut> normalisedCuts() {
+        if (this.cuts == null) {
+            this.cuts = new ArrayList<>();
+            return this.cuts;
+        }
+        boolean sorted = true;
+        for (int i = 1; i < this.cuts.size(); i++) {
+            TimelineCut previous = this.cuts.get(i - 1);
+            TimelineCut current = this.cuts.get(i);
+            if (previous == null || current == null || current.start < previous.end) {
+                sorted = false;
+                break;
+            }
+        }
+        if (sorted) {
+            return this.cuts;
+        }
+
+        List<TimelineCut> cleaned = new ArrayList<>();
+        for (TimelineCut cut : this.cuts) {
+            if (cut != null && cut.length() > 0) {
+                cleaned.add(cut.copy());
+            }
+        }
+        cleaned.sort(Comparator.comparingInt(cut -> cut.start));
+        for (int i = 1; i < cleaned.size(); ) {
+            TimelineCut previous = cleaned.get(i - 1);
+            TimelineCut current = cleaned.get(i);
+            if (previous.touches(current)) {
+                cleaned.set(i - 1, new TimelineCut(Math.min(previous.start, current.start), Math.max(previous.end, current.end)));
+                cleaned.remove(i);
+            } else {
+                i += 1;
+            }
+        }
+        this.cuts = cleaned;
+        return this.cuts;
     }
 
     public void save(Path path) {

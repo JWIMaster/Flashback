@@ -9,7 +9,7 @@ public class EditorSceneHistory {
     private final List<EditorSceneHistoryEntry> entries = new ArrayList<>();
     private int position = 0;
 
-    public void push(EditorScene editorScene, EditorSceneHistoryEntry entry) {
+    public void push(EditorScene editorScene, EditorState editorState, EditorSceneHistoryEntry entry) {
         while (this.entries.size() > this.position) {
             this.entries.removeLast();
         }
@@ -20,13 +20,16 @@ public class EditorSceneHistory {
 
         for (EditorSceneHistoryAction redo : entry.redo()) {
             redo.apply(editorScene);
+            if (editorState != null) {
+                redo.applyToProject(editorState);
+            }
         }
 
         this.entries.add(entry);
         this.position += 1;
     }
 
-    public void undo(EditorScene editorScene, Consumer<String> descriptionConsumer) {
+    public void undo(EditorScene editorScene, EditorState editorState, Consumer<String> descriptionConsumer) {
         if (this.position == 0) {
             return;
         }
@@ -35,11 +38,14 @@ public class EditorSceneHistory {
         EditorSceneHistoryEntry entry = this.entries.get(this.position);
         for (EditorSceneHistoryAction undo : entry.undo()) {
             undo.apply(editorScene);
+            if (editorState != null) {
+                undo.applyToProject(editorState);
+            }
         }
         descriptionConsumer.accept("Undo '" + entry.description() + "'");
     }
 
-    public void redo(EditorScene editorScene, Consumer<String> descriptionConsumer) {
+    public void redo(EditorScene editorScene, EditorState editorState, Consumer<String> descriptionConsumer) {
         if (this.position >= this.entries.size()) {
             return;
         }
@@ -47,6 +53,9 @@ public class EditorSceneHistory {
         EditorSceneHistoryEntry entry = this.entries.get(this.position);
         for (EditorSceneHistoryAction redo : entry.redo()) {
             redo.apply(editorScene);
+            if (editorState != null) {
+                redo.applyToProject(editorState);
+            }
         }
         descriptionConsumer.accept("Redo '" + entry.description() + "'");
 

@@ -1054,6 +1054,18 @@ public class ReplayServer extends IntegratedServer {
             // Normal playback
             this.targetTick += 1;
             normalPlayback = true;
+
+            // A cut is a stretch the edit has taken out, so playing steps straight over it and the
+            // parts either side run together - the same thing the export does with the same cuts.
+            // Asking for a jump rather than moving the tick directly reuses the seek path, which is
+            // what knows to resend the state a long jump would otherwise leave behind.
+            EditorState cutState = this.getEditorState();
+            if (cutState != null) {
+                int keptTick = cutState.nextKeptTick(this.targetTick);
+                if (keptTick != this.targetTick) {
+                    this.jumpToTick = Math.min(keptTick, this.totalTicks);
+                }
+            }
         } else if (this.targetTick == this.totalTicks && this.currentTick == this.totalTicks) {
             // Pause when reaching end of replay
             this.replayPaused = true;

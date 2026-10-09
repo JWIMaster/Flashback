@@ -456,20 +456,31 @@ public class EditorScene {
         this.push(new EditorSceneHistoryEntry(undo, redo, description));
     }
 
+    /**
+     * Records an edit that only touches this scene.
+     *
+     * <p>Most edits are like that, and they do not need the project handed to them. An entry holding
+     * a project-wide action - a cut - must be pushed with {@link #push(EditorSceneHistoryEntry, EditorState)}
+     * instead, because there is no project here to apply it to.
+     */
     public void push(EditorSceneHistoryEntry entry) {
+        this.push(entry, null);
+    }
+
+    public void push(EditorSceneHistoryEntry entry, EditorState editorState) {
         if (entry.undo().isEmpty() && entry.redo().isEmpty()) {
             return;
         }
 
-        this.history.push(this, entry);
+        this.history.push(this, editorState, entry);
     }
 
-    public void undo(Consumer<String> descriptionConsumer) {
-        this.history.undo(this, descriptionConsumer);
+    public void undo(EditorState editorState, Consumer<String> descriptionConsumer) {
+        this.history.undo(this, editorState, descriptionConsumer);
     }
 
-    public void redo(Consumer<String> descriptionConsumer) {
-        this.history.redo(this, descriptionConsumer);
+    public void redo(EditorState editorState, Consumer<String> descriptionConsumer) {
+        this.history.redo(this, editorState, descriptionConsumer);
     }
 
     public void setExportTicks(int start, int end, int totalTicks) {

@@ -353,6 +353,7 @@ public class ExportJob {
         ((WindowExt)(Object)Minecraft.getInstance().getWindow()).flashback$updateScaledFramebuffer(true);
 
         List<TickInfo> ticks = calculateTicks(this.settings.editorState(), this.settings.startTick(), this.settings.endTick(), this.settings.framerate());
+        ticks = applyCuts(this.settings.editorState(), this.settings.startTick(), ticks);
 
         int clientTickCount = 0;
 
@@ -1180,6 +1181,38 @@ public class ExportJob {
     }
 
     private record TickInfo(double serverTick, double clientTick, boolean frozen) {}
+
+    /**
+     * Drops the frames inside cut stretches and slides the client timeline up behind them.
+     *
+     * <p>A cut removes replay ticks from the edit, so those frames are never rendered and the frames
+     * after them move up by the length of the cut. The server tick of each surviving frame is left
+     * alone: it still names the replay tick the footage comes from, which is what the keyframe tracks
+     * and the replay itself are written against. Only the client tick - the timeline the exported
+     * video runs on - is compressed, and because the client timeline stays continuous across a cut the
+     * join is a hard cut rather than a stretch of interpolated movement.
+     */
+    private static List<TickInfo> applyCuts(EditorState editorState, int startTick, List<TickInfo> ticks) {
+        if (editorState.normalisedCuts().isEmpty()) {
+            return ticks;
+        }
+
+        List<TickInfo> kept = new ArrayList<>(ticks.size());
+        for (TickInfo tick : ticks) {
+            if (editorState.isCut((int) Math.floor(startTick + tick.serverTick))) {
+                continue;
+            }
+            double clientTick = editorState.keptTick(startTick + tick.clientTick) - startTick;
+            kept.add(new TickInfo(tick.serverTick, clientTick, tick.frozen));
+        }
+
+        if (kept.isEmpty()) {
+            // Every tick in the exported range was cut. Exporting nothing at all would be worse than
+            // exporting the one frame the range still starts on.
+            kept.add(ticks.get(0));
+        }
+        return kept;
+    }
 
     private static List<TickInfo> calculateTicks(EditorState editorState, int startTick, int endTick, double fps) {
         List<TickInfo> ticks = new ArrayList<>();

@@ -376,7 +376,7 @@ public class VisualsWindow {
                     new EditorSceneHistoryAction.SetKeyframe(keyframeType, newKeyframeTrackIndex, replayServer.getReplayTick(), keyframe)
                 ),
                 description
-            ));
+            ), editorState);
             editorState.markDirty();
         } finally {
             editorState.release(stamp);

@@ -34,6 +34,7 @@ import com.moulberry.flashback.state.EditorSceneHistoryAction;
 import com.moulberry.flashback.state.EditorState;
 import com.moulberry.flashback.state.EditorStateManager;
 import com.moulberry.flashback.state.KeyframeTrack;
+import com.moulberry.flashback.state.TimelineCut;
 import com.moulberry.flashback.utils.InputHelper;
 import imgui.moulberry90.ImDrawList;
 import imgui.moulberry90.ImGui;
@@ -41,6 +42,7 @@ import imgui.moulberry90.ImGuiIO;
 import imgui.moulberry90.ImVec4;
 import imgui.moulberry90.flag.ImGuiCol;
 import imgui.moulberry90.flag.ImGuiComboFlags;
+import imgui.moulberry90.flag.ImGuiHoveredFlags;
 import imgui.moulberry90.flag.ImGuiInputTextFlags;
 import imgui.moulberry90.flag.ImGuiKey;
 import imgui.moulberry90.flag.ImGuiMouseButton;
@@ -92,11 +94,32 @@ public class TimelineWindow {
     private static final int ROW_DIVIDER = 0x18FFFFFF;
     private static final int SELECTED_OUTLINE = 0xFFFFFFFF;
 
+    /**
+     * A stretch cut out of the edit: darkened, hatched and edged so it reads as removed rather than
+     * as another selection, and dark enough to stay legible over every camera colour underneath.
+     */
+    private static final int CUT_FILL = 0x48000000;
+    private static final int CUT_HATCH = 0x55FF6060;
+    private static final int CUT_EDGE = 0xB0FF7070;
+
+    /** The tick range being marked, in the same amber the keyframe marquee uses. */
+    private static final int RANGE_FILL = 0x28DD6000;
+    private static final int RANGE_EDGE = 0xFFDD6000;
+
     private static final float[] REPLAY_TICK_SPEEDS = {1.0f, 2.0f, 4.0f, 10.0f, 20.0f, 40.0f, 100.0f, 200.0f, 400.0f};
 
     // -- Live state ------------------------------------------------------------------------------
 
     private static final TimelineSelection SELECTION = new TimelineSelection();
+
+    /**
+     * The two ends of the tick range marked on the canvas, or -1 when nothing is marked.
+     *
+     * <p>Kept apart from {@link #SELECTION}, which is about keyframes: a cut is about a stretch of
+     * time, so it has to survive whatever happens to the keys inside it.
+     */
+    private static int rangeStartTick = -1;
+    private static int rangeEndTick = -1;
 
     private static EditorState editorState;
     private static EditorScene scene;
@@ -140,6 +163,18 @@ public class TimelineWindow {
     private static boolean shotMenuShowing;
     /** The tick a cut was requested for, or -1 when the menu is editing an existing shot. */
     private static int menuStartTick = -1;
+    /** A removed stretch whose menu was asked for this frame, waiting to be opened while drawing. */
+    @Nullable
+    private static TimelineCut pendingRegionMenu;
+    /**
+     * The removed stretch the region menu is about, kept for as long as the menu is open.
+     *
+     * <p>Like the shot menu, it has to be remembered because ImGui closes a popup that is not begun
+     * in a frame, and the edit it offers needs the stretch it was opened on.
+     */
+    @Nullable
+    private static TimelineCut menuRegion;
+    private static boolean openRegionMenuNow;
     /**
      * How far the row list is scrolled.
      *
@@ -498,7 +533,43 @@ public class TimelineWindow {
                 this.additive = additive;
             }
         }
+
+        /** Marking a stretch of ticks to cut out, dragged across the empty canvas. */
+        final class Range implements Drag {
+            final int anchorTick;
+            boolean moved;
+
+            Range(int anchorTick) {
+                this.anchorTick = anchorTick;
+            }
+        }
+
+        /**
+         * Moving one boundary of a removed stretch.
+         *
+         * <p>Named apart from the shot lane's {@link CutEdge}, which retimes where the output camera
+         * changes: this one changes which ticks are removed from the edit. The whole cut list is
+         * carried along because the live result is rebuilt from it each frame, so no other cut moves
+         * and none is merged while the boundary is being dragged.
+         */
+        final class RemovedEdge implements Drag {
+            final List<TimelineCut> before;
+            final int index;
+            final boolean startEdge;
+            /** How far the pointer was from the boundary it grabbed, so the boundary does not jump. */
+            final int grabOffset;
+
+            RemovedEdge(List<TimelineCut> before, int index, boolean startEdge, int grabOffset) {
+                this.before = before;
+                this.index = index;
+                this.startEdge = startEdge;
+                this.grabOffset = grabOffset;
+            }
+        }
     }
+
+    /** Which boundary of which removed stretch the pointer is on. */
+    private record CutEdgeHit(int index, boolean startEdge) {}
 
     /** What a row asked for, carried out once every row has been drawn. */
     private sealed interface RowAction {
@@ -793,7 +864,10 @@ public class TimelineWindow {
             drawList.pushClipRect(f.timelineLeft() + 1, f.y + f.rulerHeight, f.timelineRight(),
                 f.y + f.height - f.footerHeight, true);
             drawSwitchBand(f, drawList);
+            drawCutRegions(f, drawList);
+            showCutEdgeCursor(f);
             drawKeyframeRows(f, drawList);
+            drawRangeSelection(f, drawList);
             drawMarquee(f, drawList);
             drawList.popClipRect();
 
@@ -1449,6 +1523,8 @@ public class TimelineWindow {
             ImGui.openPopup("##AddElement");
         }
         ImGui.sameLine();
+        drawCutButton();
+        ImGui.sameLine();
         drawSceneSwitcher(f);
 
         if (ImGuiHelper.beginPopup("##AddElement")) {
@@ -1485,6 +1561,27 @@ public class TimelineWindow {
             }
             ImGui.endPopup();
         }
+    }
+
+    /**
+     * The one control for taking a stretch of ticks out of the edit or putting it back.
+     *
+     * <p>Its label follows the selection: over kept ticks it removes them, and over a stretch that is
+     * already gone it restores the part it covers, so the same control undoes itself. With nothing
+     * marked there is nothing to act on, so it is disabled rather than hidden - a control that comes
+     * and goes is harder to find than one that is plainly unavailable - and the hint still explains
+     * what it is for while it waits.
+     */
+    private static void drawCutButton() {
+        boolean marked = hasRangeSelection();
+        boolean restore = marked && cutContainingRange() != null;
+        ImGui.beginDisabled(!marked);
+        if (ImGui.smallButton(I18n.get(restore ? "flashback.timeline.restore_cut"
+                : "flashback.timeline.cut_out") + "##CutOut")) {
+            applyRangeCut();
+        }
+        ImGui.endDisabled();
+        ImGuiHelper.tooltip(I18n.get("flashback.timeline.cut_hint"), ImGuiHoveredFlags.AllowWhenDisabled);
     }
 
     private static void drawSceneSwitcher(Frame f) {
@@ -1876,6 +1973,85 @@ public class TimelineWindow {
         }
     }
 
+    /**
+     * The stretches that have been cut out, drawn as one region across the whole canvas.
+     *
+     * <p>A cut is about the timeline rather than one lane, so it is filled from the ruler to the
+     * footer and darkened rather than tinted: the material underneath is still there to be read,
+     * which is what keeps a keyframe inside a cut findable while the diagonal hatch makes it
+     * unmistakable that the stretch is removed. A plain tint would read as another selection, so the
+     * hatch and the hard edges are the whole point - they say exactly which ticks are gone.
+     */
+    private static void drawCutRegions(Frame f, ImDrawList drawList) {
+        List<TimelineCut> cuts = f.state.normalisedCuts();
+        if (cuts.isEmpty()) {
+            return;
+        }
+        float top = f.y + f.rulerHeight;
+        float bottom = f.y + f.height - f.footerHeight;
+        float height = bottom - top;
+        // Never zero: this is a loop step, and a UI scale of zero would make the hatch loop forever.
+        float hatchSpacing = Math.max(1, ReplayUI.scaleUi(7));
+        for (TimelineCut cut : cuts) {
+            float from = Math.max(f.timelineLeft() + 1, f.xOfTick(cut.start));
+            float to = Math.min(f.timelineRight(), f.xOfTick(cut.end));
+            if (to <= from) {
+                // Narrower than a pixel at this zoom: there is no room to show the hatch.
+                continue;
+            }
+            drawList.addRectFilled(from, top, to, bottom, CUT_FILL);
+            // The hatch is clipped to the cut so the lines stop at its edges instead of spilling
+            // into kept time, where they would imply it was removed too.
+            drawList.pushClipRect(from, top, to, bottom, true);
+            for (float x = from - height; x < to; x += hatchSpacing) {
+                drawList.addLine(x, bottom, x + height, top, CUT_HATCH, 1f);
+            }
+            drawList.popClipRect();
+            drawList.addLine(from, top, from, bottom, CUT_EDGE, 1f);
+            drawList.addLine(to, top, to, bottom, CUT_EDGE, 1f);
+        }
+    }
+
+    /**
+     * The tick range marked on the canvas, in the same amber the keyframe marquee uses so a drag
+     * reads the same wherever it lands.
+     *
+     * <p>It spans every lane for the same reason a cut does: the selection is a stretch of time
+     * rather than a set of rows, and the button that acts on it says so.
+     */
+    private static void drawRangeSelection(Frame f, ImDrawList drawList) {
+        if (!hasRangeSelection()) {
+            return;
+        }
+        float from = f.xOfTick(rangeMinTick());
+        float to = f.xOfTick(rangeMaxTick());
+        float top = f.y + f.rulerHeight;
+        float bottom = f.y + f.height - f.footerHeight;
+        drawList.addRectFilled(from, top, to, bottom, RANGE_FILL);
+        drawList.addLine(from, top, from, bottom, RANGE_EDGE, 2f);
+        drawList.addLine(to, top, to, bottom, RANGE_EDGE, 2f);
+    }
+
+    /**
+     * Shows that a removed stretch's boundary can be dragged, before it is actually grabbed.
+     *
+     * <p>The file already gives the export handles in the ruler this cue, so the same one is used
+     * here. A keyframe sitting on the boundary suppresses it, because there the press would grab the
+     * key instead, and the shot lane suppresses it because that lane has edges of its own.
+     */
+    private static void showCutEdgeCursor(Frame f) {
+        if (drag != null || !f.mouseInTimeline || !f.mouseOverRows || f.mouseOverCutsLane()) {
+            return;
+        }
+        KeyframeTrack track = f.layout.trackAt(f.rowAt(f.mouseY));
+        if (track != null && !KeyframeTrack.isCameraSwitch(track) && keyframeAt(f, track) >= 0) {
+            return;
+        }
+        if (cutEdgeAt(f) != null) {
+            ImGui.setMouseCursor(ImGuiMouseCursor.ResizeEW);
+        }
+    }
+
     private static void drawMarquee(Frame f, ImDrawList drawList) {
         if (!(drag instanceof Drag.Marquee marquee)) {
             return;
@@ -2077,6 +2253,27 @@ public class TimelineWindow {
             return;
         }
 
+        // A right-click on the canvas gives up the range selection. It may also open a keyframe or
+        // shot menu; both mean "start again", so the range should not outlive either.
+        if (right && f.mouseInTimeline) {
+            clearRangeSelection();
+        }
+
+        // Ctrl/Cmd on the ruler marks a stretch of time instead of moving the playhead. The
+        // timestamps are the one place time is marked: dragging the keyframes below stays the
+        // keyframe box-select, so nothing in the row area can arm a cut by accident. Decided here,
+        // ahead of the replay-marker and export-handle clicks a plain ruler click can mean, so the
+        // modifier does the same thing wherever the pointer is on the ruler.
+        //
+        // The key state is read raw rather than from ImGui: ImGui only learns about a modifier when
+        // a key event tells it, and holding Command and then pressing the mouse sends no such event,
+        // so a Command-drag can see a stale "not held". The keybinds already read it this way, which
+        // is why Ctrl+Z works where this gesture did not.
+        if (left && isShortcutModifierDown() && f.mouseInRuler) {
+            beginRange(f);
+            return;
+        }
+
         if (left && handleTransportClick(f)) {
             return;
         }
@@ -2198,19 +2395,29 @@ public class TimelineWindow {
         selectedShotStart = -1;
         int rowIndex = f.rowAt(f.mouseY);
         KeyframeTrack track = f.layout.trackAt(rowIndex);
-        if (track == null) {
-            if (left) {
-                beginMarquee(f);
-            }
-            return;
-        }
 
-        if (KeyframeTrack.isCameraSwitch(track)) {
+        if (track != null && KeyframeTrack.isCameraSwitch(track)) {
+            // The shot lane owns its right-clicks too, so it is decided before the region menu.
             handleCutsLaneClick(f, track, left, right);
             return;
         }
 
-        int grabbed = keyframeAt(f, track);
+        int grabbed = track == null ? -1 : keyframeAt(f, track);
+
+        // A right-click on a removed stretch offers to put it back, wherever in the canvas it lands:
+        // the region is drawn across every row, so a gap or a section heading has to answer for it
+        // too. It comes after the keyframe grab, so a key sitting on the region still opens its own
+        // menu, which is the more precise thing the pointer was aimed at.
+        if (right && grabbed < 0 && requestRegionMenu(f)) {
+            return;
+        }
+
+        if (track == null) {
+            if (left && !beginRemovedEdgeDrag(f)) {
+                beginMarquee(f);
+            }
+            return;
+        }
 
         if (right) {
             if (grabbed >= 0) {
@@ -2230,7 +2437,7 @@ public class TimelineWindow {
         }
 
         if (grabbed >= 0) {
-            if (ReplayUI.isCtrlOrCmdDown()) {
+            if (isShortcutModifierDown()) {
                 SELECTION.toggle(track, grabbed);
             } else if (!SELECTION.contains(track, grabbed)) {
                 SELECTION.replace(track, grabbed);
@@ -2240,6 +2447,12 @@ public class TimelineWindow {
                 return;
             }
             drag = new Drag.Keys(track, grabbed, f.mouseX, f.mouseY);
+            return;
+        }
+
+        // A boundary of a removed stretch wins over marking a new one, but only after the keyframe
+        // check above: grabbing a key that happens to sit on the boundary is the more precise gesture.
+        if (beginRemovedEdgeDrag(f)) {
             return;
         }
 
@@ -2341,14 +2554,218 @@ public class TimelineWindow {
         openCutMenuNow = true;
     }
 
+    /**
+     * Starts the keyframe box-select, which is what a plain drag over the rows means.
+     *
+     * <p>Marking a stretch of time is deliberately not this gesture: dragging across the keyframes is
+     * how keys are picked out, and having that also arm the cut tool made an ordinary drag look like
+     * it was cutting the replay. Marking time lives on the ruler - the one place that is about time
+     * rather than about keys - so a cut is always a deliberate gesture on the timestamps.
+     *
+     * <p>Shift adds to the selection instead of replacing it. It means "ignore the magnet" on the
+     * drags that snap, but a marquee has nothing to snap, so the key is free here.
+     */
     private static void beginMarquee(Frame f) {
-        drag = new Drag.Marquee(f.mouseX, f.mouseY, ReplayUI.isCtrlOrCmdDown());
+        boolean additive = InputHelper.isShiftDownRaw();
+        drag = new Drag.Marquee(f.mouseX, f.mouseY, additive);
         if (drag instanceof Drag.Marquee marquee) {
             marquee.before.addAll(SELECTION);
         }
-        if (!ReplayUI.isCtrlOrCmdDown()) {
+        if (!additive) {
             SELECTION.clear();
         }
+    }
+
+    /**
+     * Marks a tick range from wherever the gesture began - the empty canvas or, with Ctrl/Cmd, the
+     * ruler - so both places pick the same ticks and show the same highlight.
+     *
+     * <p>The anchored end goes through the same magnet as every other drag, so a cut can be lined up
+     * exactly with a keyframe; Shift turns the magnet off, as it does everywhere else.
+     */
+    private static void beginRange(Frame f) {
+        int anchor = snapTick(f, f.tickAtX(f.mouseX));
+        drag = new Drag.Range(anchor);
+        rangeStartTick = anchor;
+        rangeEndTick = anchor;
+    }
+
+    /** Whether a stretch of ticks is currently marked, which is what the cut control acts on. */
+    private static boolean hasRangeSelection() {
+        return rangeStartTick >= 0 && rangeEndTick >= 0 && rangeStartTick != rangeEndTick;
+    }
+
+    private static int rangeMinTick() {
+        return Math.min(rangeStartTick, rangeEndTick);
+    }
+
+    private static int rangeMaxTick() {
+        return Math.max(rangeStartTick, rangeEndTick);
+    }
+
+    private static void clearRangeSelection() {
+        rangeStartTick = -1;
+        rangeEndTick = -1;
+    }
+
+    /**
+     * The cut the whole range sits inside, or null when any of it is still kept.
+     *
+     * <p>Only a range one cut covers completely can be restored; a range that reaches past the cut
+     * also describes kept ticks, so there the control offers to remove them instead.
+     */
+    @Nullable
+    private static TimelineCut cutContainingRange() {
+        TimelineCut cut = editorState.cutAt(rangeMinTick());
+        if (cut == null || rangeMaxTick() > cut.end) {
+            return null;
+        }
+        return cut;
+    }
+
+    /**
+     * Carries out what the cut control offers: remove the marked stretch, or put back the part of a
+     * cut the range sits inside, as one undoable step.
+     *
+     * <p>Restoring goes through {@link EditorState#restoreRange}, so putting back the middle of a
+     * long cut leaves the rest of it removed rather than throwing the whole cut away. Either way the
+     * list is snapshotted on both sides, because a removal can merge cuts and a restore can split
+     * one, and undo has to be exact about that.
+     */
+    private static void applyRangeCut() {
+        if (!hasRangeSelection()) {
+            return;
+        }
+        boolean restore = cutContainingRange() != null;
+        List<TimelineCut> before = snapshotCuts();
+        if (restore) {
+            editorState.restoreRange(rangeMinTick(), rangeMaxTick());
+        } else {
+            editorState.addCut(rangeMinTick(), rangeMaxTick());
+        }
+        List<TimelineCut> after = snapshotCuts();
+        if (sameCuts(before, after)) {
+            // Nothing moved, so there is nothing worth an undo step.
+            return;
+        }
+        upgradeToWrite();
+        TimelineEdits.setCuts(scene, editorState, before, after,
+            I18n.get(restore ? "flashback.timeline.restore_cut" : "flashback.timeline.cut_out"));
+    }
+
+    /**
+     * Puts one whole removed stretch back, as the region menu offers.
+     *
+     * <p>It is the same edit a marked range inside the cut would make, reached from the region
+     * itself; the range selection is deliberately left alone, because the user asked for this cut
+     * rather than for whatever happened to be marked. The list is snapshotted on both sides so the
+     * restore is one exact undo step, and {@link EditorState#restoreRange} covers the whole stretch.
+     */
+    private static void restoreRegion(TimelineCut cut) {
+        List<TimelineCut> before = snapshotCuts();
+        editorState.restoreRange(cut.start, cut.end);
+        List<TimelineCut> after = snapshotCuts();
+        if (sameCuts(before, after)) {
+            return;
+        }
+        upgradeToWrite();
+        TimelineEdits.setCuts(scene, editorState, before, after, I18n.get("flashback.timeline.restore_cut"));
+    }
+
+    /**
+     * A copy of the cut list, taken either side of an edit so undo can put the old one back.
+     *
+     * <p>The copies matter: the live list is replaced rather than edited in place, so a snapshot
+     * that shared its entries would quietly change with it and undo would restore the new state.
+     */
+    private static List<TimelineCut> snapshotCuts() {
+        List<TimelineCut> snapshot = new ArrayList<>();
+        for (TimelineCut cut : editorState.normalisedCuts()) {
+            snapshot.add(cut.copy());
+        }
+        return snapshot;
+    }
+
+    /** Whether two cut lists hold the same stretches, by tick rather than by identity. */
+    private static boolean sameCuts(List<TimelineCut> a, List<TimelineCut> b) {
+        if (a.size() != b.size()) {
+            return false;
+        }
+        for (int i = 0; i < a.size(); i++) {
+            if (a.get(i).start != b.get(i).start || a.get(i).end != b.get(i).end) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * The removed-stretch boundary nearest the pointer, or null when none is close enough.
+     *
+     * <p>The grab area is narrow on purpose: the body of a cut is still empty canvas, where the plain
+     * drag keeps its meaning of marking a new stretch, so only the edges behave differently.
+     */
+    @Nullable
+    private static CutEdgeHit cutEdgeAt(Frame f) {
+        // Never zero, so the comparison below can only match a boundary the pointer is really on.
+        float bestDistance = Math.max(1, ReplayUI.scaleUi(5));
+        CutEdgeHit best = null;
+        List<TimelineCut> cuts = editorState.normalisedCuts();
+        for (int i = 0; i < cuts.size(); i++) {
+            TimelineCut cut = cuts.get(i);
+            float startDistance = Math.abs(f.xOfTick(cut.start) - f.mouseX);
+            if (startDistance <= bestDistance) {
+                bestDistance = startDistance;
+                best = new CutEdgeHit(i, true);
+            }
+            float endDistance = Math.abs(f.xOfTick(cut.end) - f.mouseX);
+            if (endDistance < bestDistance) {
+                bestDistance = endDistance;
+                best = new CutEdgeHit(i, false);
+            }
+        }
+        return best;
+    }
+
+    /**
+     * Starts moving the boundary of a removed stretch under the pointer.
+     *
+     * <p>Returns whether one was grabbed, so the caller can fall through to marking a new range when
+     * there was nothing to move.
+     */
+    private static boolean beginRemovedEdgeDrag(Frame f) {
+        CutEdgeHit hit = cutEdgeAt(f);
+        if (hit == null) {
+            return false;
+        }
+        List<TimelineCut> before = snapshotCuts();
+        TimelineCut cut = before.get(hit.index());
+        int boundaryTick = hit.startEdge() ? cut.start : cut.end;
+        // The pointer rarely lands exactly on the boundary, so remember where it was: without this
+        // the boundary would jump to the pointer on the first frame of the drag.
+        int grabOffset = f.tickAtX(f.mouseX) - boundaryTick;
+        drag = new Drag.RemovedEdge(before, hit.index(), hit.startEdge(), grabOffset);
+        return true;
+    }
+
+    /**
+     * Asks for the menu that puts a removed stretch back, when the pointer is on one.
+     *
+     * <p>The stretch is found by tick rather than by pixels, so the whole hatched region answers to
+     * the right-click and not only the line drawn along its edge. A copy is kept because the live
+     * cut list can be replaced before the menu is answered, and the menu still has to know which
+     * stretch it is offering to restore.
+     *
+     * @return whether a removed stretch was under the pointer, so the caller knows the click was used
+     */
+    private static boolean requestRegionMenu(Frame f) {
+        TimelineCut cut = editorState.cutAt(f.tickAtX(f.mouseX));
+        if (cut == null) {
+            return false;
+        }
+        pendingRegionMenu = cut.copy();
+        openRegionMenuNow = true;
+        return true;
     }
 
     private static int dragButton() {
@@ -2467,6 +2884,40 @@ public class TimelineWindow {
                 }
                 editorState.markDirty();
             }
+            case Drag.RemovedEdge edge -> {
+                int tick = snapTick(f, f.tickAtX(f.mouseX) - edge.grabOffset);
+                List<TimelineCut> live = new ArrayList<>(edge.before.size());
+                TimelineCut moved = null;
+                for (int i = 0; i < edge.before.size(); i++) {
+                    TimelineCut cut = edge.before.get(i).copy();
+                    if (i == edge.index) {
+                        moved = cut;
+                    }
+                    live.add(cut);
+                }
+                if (moved != null) {
+                    if (edge.startEdge) {
+                        // The start may not reach the end, and may not go before the replay: a
+                        // removed stretch always keeps at least one tick.
+                        moved.start = Math.max(0, Math.min(moved.end - 1, tick));
+                    } else {
+                        moved.end = Math.min(f.totalTicks, Math.max(moved.start + 1, tick));
+                    }
+                    // Live feedback only: the history entry is recorded once, on release, so the whole
+                    // drag is a single undo step and no other cut is touched while it moves.
+                    editorState.setCuts(live);
+                    ImGui.setMouseCursor(ImGuiMouseCursor.ResizeEW);
+                    ImGuiHelper.drawTooltip(I18n.get("flashback.timeline.shot_range",
+                        ticksToTimestamp(moved.start), ticksToTimestamp(moved.end)));
+                }
+            }
+            case Drag.Range range -> {
+                int tick = snapTick(f, f.tickAtX(f.mouseX));
+                if (tick != range.anchorTick) {
+                    range.moved = true;
+                }
+                rangeEndTick = tick;
+            }
             case Drag.Marquee marquee -> {
                 SELECTION.clear();
                 if (marquee.additive) {
@@ -2495,6 +2946,15 @@ public class TimelineWindow {
                 TimelineEdits.moveCut(scene, editorState, edge.cutTick, edge.target);
                 selectedShotStart = edge.target;
             }
+        } else if (finished instanceof Drag.RemovedEdge edge) {
+            // One history entry for the whole drag, from the snapshot taken when it began. A drag
+            // that put the boundary back where it found it records nothing.
+            List<TimelineCut> after = snapshotCuts();
+            if (!sameCuts(edge.before, after)) {
+                upgradeToWrite();
+                TimelineEdits.setCuts(scene, editorState, edge.before, after,
+                    I18n.get("flashback.timeline.adjusted_cut"));
+            }
         } else if (finished instanceof Drag.ShotBody body) {
             if (body.delta != 0) {
                 upgradeToWrite();
@@ -2503,6 +2963,12 @@ public class TimelineWindow {
             }
         } else if (finished instanceof Drag.Row row) {
             applyRowReorder(f, row);
+        } else if (finished instanceof Drag.Range range) {
+            // A press that never dragged is how the selection is given up, and so is a drag that
+            // came back to where it started: either way there is no stretch left to act on.
+            if (!range.moved || !hasRangeSelection()) {
+                clearRangeSelection();
+            }
         } else if (finished instanceof Drag.Head) {
             f.replayServer.replayPaused = true;
         }
@@ -2803,7 +3269,7 @@ public class TimelineWindow {
         // Both command keys zoom, whichever one the platform or the user thinks of as "command",
         // and the binding is honoured on top so a customised gesture still works.
         ImGuiIO io = ReplayUI.getIO();
-        boolean zoomModifier = io.getKeyCtrl() || io.getKeySuper()
+        boolean zoomModifier = isShortcutModifierDown()
             || Keybinds.TIMELINE_ZOOM_SCROLL.areAllModifiersDown();
         boolean panModifier = io.getKeyShift() || Keybinds.TIMELINE_MOVE_SCROLL.areAllModifiersDown();
         if (zoomModifier) {
@@ -2834,6 +3300,21 @@ public class TimelineWindow {
         editorState.markDirty();
     }
 
+    /**
+     * Whether the shortcut modifier is held: Command on macOS, Ctrl everywhere else.
+     *
+     * <p>Read from the keyboard itself rather than from ImGui's cached modifier flags. ImGui only
+     * updates those flags when a key event arrives, so a gesture that begins with the modifier
+     * already down - holding Command and then pressing the mouse - can find the stale state and
+     * decide the modifier is not held, which is what kept Command-drag from marking a range.
+     */
+    private static boolean isShortcutModifierDown() {
+        // Both modifiers are accepted. Command is the Mac convention, but someone reaching for Ctrl
+        // expects the gesture to answer too, and on Windows and Linux the two are the same key, so
+        // the extra check only ever adds a way to do the same thing.
+        return InputHelper.isCtrlOrCmdDownRaw() || InputHelper.isCtrlDownRaw();
+    }
+
     private static void handleKeyPresses(Frame f) {
         if (Keybinds.PAUSE.isPressed(false)) {
             togglePaused(f.replayServer);
@@ -2854,8 +3335,19 @@ public class TimelineWindow {
             jumpToNeighbouringKeyframe(f, -1);
         }
 
+        // Escape gives up the range selection, the same way a right-click or a click without a drag
+        // does, so there is always a way out of the gesture that does not edit anything.
+        if (ImGui.isKeyPressed(ImGuiKey.Escape, false)) {
+            clearRangeSelection();
+        }
+
         boolean delete = ImGui.isKeyPressed(ImGuiKey.Delete, false) || ImGui.isKeyPressed(ImGuiKey.Backspace, false);
-        if (delete && !SELECTION.isEmpty()) {
+        if (delete && hasRangeSelection()) {
+            // A marked range takes Delete, because it is the more explicit thing on screen and the
+            // control it stands for does exactly this. The keyframe selection still gets the key
+            // whenever no range is marked, which is where deleting keys is expected to work.
+            applyRangeCut();
+        } else if (delete && !SELECTION.isEmpty()) {
             deleteSelection();
         } else if (delete) {
             deleteSelectedShot();
@@ -2863,12 +3355,12 @@ public class TimelineWindow {
 
         if (Keybinds.UNDO.isPressed(false)) {
             upgradeToWrite();
-            scene.undo(ReplayUI::setInfoOverlayShort);
+            scene.undo(editorState, ReplayUI::setInfoOverlayShort);
             editorState.markDirty();
         }
         if (Keybinds.REDO.isPressed(false)) {
             upgradeToWrite();
-            scene.redo(ReplayUI::setInfoOverlayShort);
+            scene.redo(editorState, ReplayUI::setInfoOverlayShort);
             editorState.markDirty();
         }
         if (Keybinds.COPY.isPressed(false) && !SELECTION.isEmpty()) {
@@ -2911,15 +3403,10 @@ public class TimelineWindow {
             addCameraKeyframeAtCursor(f);
         }
 
-        // Ctrl while scrubbing applies the keyframes live, which is how a shot is previewed.
-        if (drag instanceof Drag.Head && !scene.keyframeTracks.isEmpty()) {
-            if (InputHelper.isCtrlDownRaw()) {
-                editorState.applyKeyframes(new MinecraftKeyframeHandler(Minecraft.getInstance()), f.cursorTicks, sceneStamp);
-            } else if (!InputHelper.isShiftDownRaw()) {
-                // One tooltip with both hints: two tooltips would draw on top of each other.
-                ImGuiHelper.drawTooltip(I18n.get("flashback.hold_ctrl_to_apply_keyframes")
-                    + "\n" + I18n.get("flashback.hold_shift_for_free_positioning"));
-            }
+        // Scrubbing already applies the keyframes through seek(), so the only hint left here is the
+        // one about placing a grabbed keyframe freely.
+        if (drag instanceof Drag.Head && !scene.keyframeTracks.isEmpty() && !InputHelper.isShiftDownRaw()) {
+            ImGuiHelper.drawTooltip(I18n.get("flashback.hold_shift_for_free_positioning"));
         }
     }
 
@@ -3197,6 +3684,7 @@ public class TimelineWindow {
     private static void drawPopups(Frame f) {
         drawInspector(f);
         drawCutMenu(f);
+        drawRegionMenu();
         drawCreateAtTickPopup(f);
         drawRenameCameraPopup();
     }
@@ -3444,6 +3932,42 @@ public class TimelineWindow {
                     selectedShotStart = -1;
                     ImGui.closeCurrentPopup();
                 }
+            }
+            ImGui.endPopup();
+        }
+        ImGui.popID();
+    }
+
+    /**
+     * The menu a right-click on a removed stretch opens: one item that puts the whole stretch back.
+     *
+     * <p>It is kept and begun every frame like the shot menu, because ImGui closes a popup that is
+     * not begun in a frame. The stretch it was opened on is remembered as a copy, so the answer is
+     * about what the user right-clicked even if the live list has moved on since.
+     */
+    private static void drawRegionMenu() {
+        if (pendingRegionMenu != null) {
+            menuRegion = pendingRegionMenu;
+            pendingRegionMenu = null;
+        }
+        if (menuRegion == null) {
+            return;
+        }
+
+        ImGui.pushID("##CutRegionMenuScope");
+        if (openRegionMenuNow) {
+            ImGui.openPopup("##CutRegionMenu");
+            openRegionMenuNow = false;
+        }
+        boolean begun = ImGuiHelper.beginPopup("##CutRegionMenu");
+        if (!begun) {
+            // Dismissed without choosing, so there is nothing left to remember.
+            menuRegion = null;
+        }
+        if (begun) {
+            if (ImGui.menuItem(I18n.get("flashback.timeline.restore_cut") + "##restoreRegion")) {
+                restoreRegion(menuRegion);
+                ImGui.closeCurrentPopup();
             }
             ImGui.endPopup();
         }

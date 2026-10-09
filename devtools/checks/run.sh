@@ -60,6 +60,7 @@ run_check() {
 for suite in \
     com.moulberry.flashback.state.MigrationTest \
     com.moulberry.flashback.state.EvaluationTest \
+    com.moulberry.flashback.state.CutTest \
     com.moulberry.flashback.state.LoadCompatTest \
     com.moulberry.flashback.editor.ui.timeline.LayoutTest \
     com.moulberry.flashback.keyframe.OrbitTest \

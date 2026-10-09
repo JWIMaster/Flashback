@@ -3,6 +3,7 @@ package com.moulberry.flashback.state;
 import com.google.gson.JsonDeserializationContext;
 import com.google.gson.JsonDeserializer;
 import com.google.gson.JsonElement;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParseException;
 import com.google.gson.JsonSerializationContext;
@@ -11,12 +12,24 @@ import com.moulberry.flashback.keyframe.Keyframe;
 import com.moulberry.flashback.keyframe.KeyframeType;
 
 import java.lang.reflect.Type;
+import java.util.ArrayList;
 import java.util.List;
 import com.moulberry.flashback.keyframe.impl.CameraSwitchKeyframe;
 
 public interface EditorSceneHistoryAction {
 
     void apply(EditorScene editorScene);
+
+    /**
+     * Applies an action to the project rather than to one scene.
+     *
+     * <p>Almost everything the timeline records is a change to a scene's tracks and cameras, which is
+     * why an action is normally applied to a scene. The cuts belong to the project as a whole - they
+     * are about the replay's timeline, not about one camera - so an action that changes them also
+     * overrides this.
+     */
+    default void applyToProject(EditorState editorState) {
+    }
 
     record SetKeyframe(KeyframeType<?> type, int trackIndex, int tick, Keyframe keyframe) implements EditorSceneHistoryAction {
         @Override
@@ -341,6 +354,64 @@ public interface EditorSceneHistoryAction {
         }
     }
 
+    /**
+     * Replaces the project's cuts.
+     *
+     * <p>The whole list is stored either side of the edit rather than the one cut that moved: cutting
+     * merges neighbouring cuts, restoring splits them, and dragging an edge changes one of them, so a
+     * snapshot of the list is the only description that stays exact through all of it.
+     */
+    record SetCuts(List<TimelineCut> before, List<TimelineCut> after) implements EditorSceneHistoryAction {
+        @Override
+        public void apply(EditorScene editorScene) {
+        }
+
+        @Override
+        public void applyToProject(EditorState editorState) {
+            editorState.setCuts(this.after);
+        }
+
+        /** Cuts are written as pairs of ticks, which reads plainly in a saved project. */
+        static JsonArray writeCuts(List<TimelineCut> cuts) {
+            JsonArray array = new JsonArray();
+            for (TimelineCut cut : cuts) {
+                JsonArray pair = new JsonArray();
+                pair.add(cut.start);
+                pair.add(cut.end);
+                array.add(pair);
+            }
+            return array;
+        }
+
+        static List<TimelineCut> readCuts(JsonElement element) {
+            List<TimelineCut> cuts = new ArrayList<>();
+            if (element == null || !element.isJsonArray()) {
+                return cuts;
+            }
+            for (JsonElement entry : element.getAsJsonArray()) {
+                JsonArray pair = entry.getAsJsonArray();
+                cuts.add(new TimelineCut(pair.get(0).getAsInt(), pair.get(1).getAsInt()));
+            }
+            return cuts;
+        }
+
+        public static class TypeAdapter implements JsonSerializer<SetCuts>, JsonDeserializer<SetCuts> {
+            @Override
+            public SetCuts deserialize(JsonElement json, Type typeOfT, JsonDeserializationContext context) throws JsonParseException {
+                JsonObject jsonObject = json.getAsJsonObject();
+                return new SetCuts(readCuts(jsonObject.get("before")), readCuts(jsonObject.get("after")));
+            }
+
+            @Override
+            public JsonElement serialize(SetCuts src, Type typeOfSrc, JsonSerializationContext context) {
+                JsonObject jsonObject = new JsonObject();
+                jsonObject.add("before", writeCuts(src.before));
+                jsonObject.add("after", writeCuts(src.after));
+                return jsonObject;
+            }
+        }
+    }
+
     class TypeAdapter implements JsonSerializer<EditorSceneHistoryAction>, JsonDeserializer<EditorSceneHistoryAction> {
         @Override
         public EditorSceneHistoryAction deserialize(JsonElement json, Type typeOfT, JsonDeserializationContext context) throws JsonParseException {
@@ -355,6 +426,7 @@ public interface EditorSceneHistoryAction {
                 case "remove_camera" -> context.deserialize(json, RemoveCamera.class);
                 case "reorder_camera" -> context.deserialize(json, ReorderCamera.class);
                 case "restore_track" -> context.deserialize(json, RestoreTrack.class);
+                case "set_cuts" -> context.deserialize(json, SetCuts.class);
                 default -> throw new IllegalStateException("Unknown action type: " + type);
             };
         }
@@ -394,6 +466,10 @@ public interface EditorSceneHistoryAction {
                 case RestoreTrack restoreTrack -> {
                     jsonObject = (JsonObject) context.serialize(restoreTrack);
                     jsonObject.addProperty("action_type", "restore_track");
+                }
+                case SetCuts setCuts -> {
+                    jsonObject = (JsonObject) context.serialize(setCuts);
+                    jsonObject.addProperty("action_type", "set_cuts");
                 }
                 default -> throw new IllegalStateException("Unknown action type: " + src.getClass());
             }

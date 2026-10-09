@@ -9,6 +9,7 @@ import com.moulberry.flashback.state.EditorCamera;
 import com.moulberry.flashback.state.EditorScene;
 import com.moulberry.flashback.state.EditorSceneHistoryAction;
 import com.moulberry.flashback.state.EditorSceneHistoryEntry;
+import com.moulberry.flashback.state.TimelineCut;
 import com.moulberry.flashback.state.EditorState;
 import com.moulberry.flashback.state.KeyframeTrack;
 import net.minecraft.client.resources.language.I18n;
@@ -410,8 +411,23 @@ public final class TimelineEdits {
      */
     public static void push(EditorScene scene, EditorState state, List<EditorSceneHistoryAction> undo,
                             List<EditorSceneHistoryAction> redo, String description) {
-        scene.push(new EditorSceneHistoryEntry(undo, redo, description));
+        scene.push(new EditorSceneHistoryEntry(undo, redo, description), state);
         state.markDirty();
+    }
+
+    /**
+     * Records a change to which stretches of the replay are cut out.
+     *
+     * <p>Cuts are a property of the project rather than of a scene, but they are edited on the
+     * timeline like everything else, so recording them here keeps undo working the same way it does
+     * for keyframes. Both lists are snapshots taken either side of the edit.
+     */
+    public static void setCuts(EditorScene scene, EditorState state, List<TimelineCut> before,
+                               List<TimelineCut> after, String description) {
+        push(scene, state,
+            List.of(new EditorSceneHistoryAction.SetCuts(after, before)),
+            List.of(new EditorSceneHistoryAction.SetCuts(before, after)),
+            description);
     }
 
     @Nullable
