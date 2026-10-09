@@ -1,0 +1,59 @@
+plugins {
+    // Keep Loom deferred to allow wrapper generation under other Gradle versions
+    id 'fabric-loom' version '1.7.4' apply false
+}
+
+group = project.findProperty('maven_group')
+version = project.findProperty('mod_version')
+
+def isWrapperTask = gradle.startParameter.taskNames.any { it.toLowerCase().startsWith('wrapper') }
+def gradleVersionOk = org.gradle.util.GradleVersion.current() < org.gradle.util.GradleVersion.version('9.0')
+def targetJavaVersion = (project.findProperty('java_version') ?: '21').toInteger()
+
+if (!isWrapperTask && !gradleVersionOk) {
+    throw new GradleException("This build requires Gradle 8.x. Please use the project wrapper: ./gradlew build")
+}
+
+if (!isWrapperTask) {
+    apply plugin: 'fabric-loom'
+
+    base {
+        archivesName = project.findProperty('archives_base_name')
+    }
+
+    repositories {
+        mavenCentral()
+        maven { url = 'https://maven.fabricmc.net/' }
+    }
+
+    dependencies {
+        minecraft "com.mojang:minecraft:${minecraft_version}"
+        mappings "net.fabricmc:yarn:${yarn_mappings}:v2"
+
+        modImplementation "net.fabricmc:fabric-loader:${loader_version}"
+        modImplementation "net.fabricmc.fabric-api:fabric-api:${fabric_api_version}"
+    }
+
+    java {
+        toolchain.languageVersion = JavaLanguageVersion.of(targetJavaVersion)
+        withSourcesJar()
+    }
+
+    tasks.withType(JavaCompile).configureEach {
+        options.encoding = 'UTF-8'
+        options.release = targetJavaVersion
+    }
+
+    processResources {
+        inputs.property "version", project.version
+        filteringCharset = 'UTF-8'
+        filesMatching('fabric.mod.json') {
+            expand version: project.version
+        }
+    }
+
+    tasks.remapJar {
+        archiveBaseName.set(project.findProperty('archives_base_name').toString())
+    }
+}
+

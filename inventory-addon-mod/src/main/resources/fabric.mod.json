@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "flashbackinventoryaddon",
+  "version": "${version}",
+  "name": "Flashback inventory addon",
+  "description": "Forces Flashback replay exports to include GUI layers while spectating first-person.",
+  "authors": ["Flashback Inventory Addon"],
+  "license": "All Rights Reserved",
+  "environment": "client",
+  "entrypoints": {
+    "client": ["com.flashbackinventoryaddon.FlashbackInventoryAddon"]
+  },
+  "depends": {
+    "fabricloader": ">=0.16.10",
+    "minecraft": "~1.21.1",
+    "java": ">=21",
+    "fabric-api": "*"
+  },
+  "mixins": [
+    "flashbackinventoryaddon.mixins.json"
+  ]
+}
