@@ -218,14 +218,25 @@ public class ContainerGuiCheck {
     private static void theHotbarPayloadCarriesAnInventoryIndex(Path root) throws Exception {
         String handler = Files.readString(
             root.resolve("com/moulberry/flashback/playback/ReplayGamePacketHandler.java"));
-        String body = methodBody(handler, "handleContainerSetSlot");
-        check("the container slot handler was found", body != null);
-        if (body == null) {
-            return;
+        String body = methodBody(handler, "mirrorOwnInventory");
+        check("the inventory mirror was found", body != null);
+        if (body != null) {
+            check("it asks the slot for its own container's index", body.contains("getContainerSlot()"));
+            check("the recorded player's inventory is not addressed with a menu index",
+                !body.contains("FlashbackRemoteSetSlot(player.getId(), slot,"));
         }
-        check("it asks the slot for its own container's index", body.contains("getContainerSlot()"));
-        check("the recorded player's inventory is not addressed with a menu index",
-            !body.contains("FlashbackRemoteSetSlot(player.getId(), slot,"));
+
+        // The first-person hotbar is not part of the container interface, so hiding the interface must
+        // not stop the recorded player's inventory being kept current - and must not leave this side
+        // believing the client has something it was never sent.
+        String slotHandler = methodBody(handler, "handleContainerSetSlot");
+        check("the container slot handler was found", slotHandler != null);
+        if (slotHandler != null) {
+            int mirror = slotHandler.indexOf("mirrorOwnInventory(");
+            int gate = slotHandler.indexOf("GuiPlayback.shouldShow()");
+            check("the inventory is mirrored before the interface is gated",
+                mirror >= 0 && gate >= 0 && mirror < gate);
+        }
     }
 
     /**
