@@ -1607,17 +1607,17 @@ public class TimelineWindow {
         if (ImGuiHelper.beginPopup("##AddElement")) {
             if (ImGui.menuItem("\ue04b " + I18n.get("flashback.new_camera") + "##addCamera")) {
                 sceneStamp = upgradeToWrite(editorState, sceneStamp, sceneStampIsWrite);
-                TimelineEdits.addCamera(scene, editorState, EditorCamera.Kind.FREE, f.cursorTicks);
+                TimelineEdits.addCamera(scene, editorState, EditorCamera.Kind.FREE, f.cursorTicks, currentViewPose());
                 ImGui.closeCurrentPopup();
             }
             if (ImGui.menuItem("\ue577 " + I18n.get("flashback.new_orbit_camera") + "##addOrbitCamera")) {
                 sceneStamp = upgradeToWrite(editorState, sceneStamp, sceneStampIsWrite);
-                TimelineEdits.addCamera(scene, editorState, EditorCamera.Kind.ORBIT, f.cursorTicks);
+                TimelineEdits.addCamera(scene, editorState, EditorCamera.Kind.ORBIT, f.cursorTicks, currentViewPose());
                 ImGui.closeCurrentPopup();
             }
             if (ImGui.menuItem("\ue7fd " + I18n.get("flashback.new_spectate_camera") + "##addSpectateCamera")) {
                 sceneStamp = upgradeToWrite(editorState, sceneStamp, sceneStampIsWrite);
-                TimelineEdits.addCamera(scene, editorState, EditorCamera.Kind.SPECTATE, f.cursorTicks);
+                TimelineEdits.addCamera(scene, editorState, EditorCamera.Kind.SPECTATE, f.cursorTicks, currentViewPose());
                 ImGui.closeCurrentPopup();
             }
             // Duplicating copies what you are working on: the selected camera if there is one, and
@@ -3510,11 +3510,28 @@ public class TimelineWindow {
         }
     }
 
+    /**
+     * Where a newly created camera should start: the pose the editor's view already has.
+     *
+     * <p>Captured through the same route a camera keyframe uses, so the two agree on which entity the
+     * view is on and on the roll the editor is showing. A camera created while spectating a player
+     * therefore starts where that player is and looking the way they look, and the cut that creating
+     * a camera makes - which is what stops the spectating - lands beside them rather than at the
+     * origin.
+     */
+    private static EditorCamera.Pose currentViewPose() {
+        if (CameraKeyframeType.INSTANCE.createDirect() instanceof CameraKeyframe captured) {
+            return new EditorCamera.Pose(captured.position.x, captured.position.y, captured.position.z,
+                captured.yaw, captured.pitch, captured.roll);
+        }
+        return EditorCamera.Pose.ORIGIN;
+    }
+
     private static void addCameraKeyframeAtCursor(Frame f) {
         EditorCamera camera = cameraForEditing(f);
         if (camera == null) {
             sceneStamp = upgradeToWrite(editorState, sceneStamp, sceneStampIsWrite);
-            TimelineEdits.addCamera(scene, editorState, EditorCamera.Kind.FREE, f.cursorTicks);
+            TimelineEdits.addCamera(scene, editorState, EditorCamera.Kind.FREE, f.cursorTicks, currentViewPose());
             camera = cameraForEditing(f);
         }
         if (camera == null) {

@@ -33,9 +33,18 @@ public final class TimelineEdits {
     private TimelineEdits() {
     }
 
-    /** Creates a camera of the given kind with its first track, and cuts to it at {@code tick}. */
-    public static void addCamera(EditorScene scene, EditorState state, EditorCamera.Kind kind, int tick) {
+    /**
+     * Creates a camera of the given kind, started at {@code pose}, and cuts to it at {@code tick}.
+     *
+     * <p>The pose is required rather than optional: a camera created at the origin is the one thing a
+     * new camera must never be, so every caller has to say where it belongs. Callers take it from the
+     * view the editor is showing, which puts a camera created while spectating a player beside that
+     * player - so cutting away from spectating lands near them instead of somewhere unrelated.
+     */
+    public static void addCamera(EditorScene scene, EditorState state, EditorCamera.Kind kind, int tick,
+                                 EditorCamera.Pose pose) {
         EditorCamera camera = new EditorCamera(null, kind);
+        camera.startAt(pose);
         KeyframeType<?> firstType = kind.trackTypes().get(0);
         int cameraIndex = scene.cameras.size();
         int trackIndex = scene.insertionIndexForTrackOf(camera);

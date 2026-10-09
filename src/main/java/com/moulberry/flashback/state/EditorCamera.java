@@ -59,6 +59,20 @@ public final class EditorCamera {
         }
     }
 
+    /**
+     * A viewpoint: a position and an orientation.
+     *
+     * <p>A camera is created at the pose the editor was already showing - see
+     * {@link #startAt(Pose)} - so cutting to a new camera leaves the view where the user was looking
+     * instead of at the origin. Deliberately not persisted: it describes where a camera starts, not
+     * what it is.
+     */
+    public record Pose(double x, double y, double z, float yaw, float pitch, float roll) {
+
+        /** The fallback for when there is no view to copy, such as outside a replay. */
+        public static final Pose ORIGIN = new Pose(0, 0, 0, 0, 0, 0);
+    }
+
     /** Stable identity, referenced by camera-switch keyframes. */
     @SerializedName("id")
     public UUID id = UUID.randomUUID();
@@ -174,6 +188,23 @@ public final class EditorCamera {
         copy.cameraShakeYFrequency = this.cameraShakeYFrequency;
         copy.cameraShakeYAmplitude = this.cameraShakeYAmplitude;
         return copy;
+    }
+
+    /**
+     * Starts a camera at {@code pose}, so a new camera is where the editor's view already is.
+     *
+     * <p>Only the pose is taken: fov stays unset ({@link #fov} keeps its -1 sentinel) and shake stays
+     * off, because those are the camera's own choices rather than part of where it is. A camera that
+     * was never started at a pose - one read from a project, or built by a check - keeps whatever it
+     * was given.
+     */
+    public void startAt(Pose pose) {
+        this.x = pose.x();
+        this.y = pose.y();
+        this.z = pose.z();
+        this.yaw = pose.yaw();
+        this.pitch = pose.pitch();
+        this.roll = pose.roll();
     }
 
     /**

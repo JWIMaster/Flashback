@@ -14,7 +14,7 @@ for recording and replaying in game.
 | --- | --- |
 | `MigrationTest` | old projects gaining cameras without losing data |
 | `EvaluationTest` | which camera a tick resolves to, and which tracks may animate it |
-| `CameraObjectTest` | independent camera position/rotation tracks, and a camera's static values |
+| `CameraObjectTest` | independent camera position/rotation tracks, a camera's static values, and where a new camera starts |
 | `LoadCompatTest` | project JSON in the shape stock 0.43.6 wrote |
 | `LayoutTest` | timeline rows, ordering, selection and panel geometry |
 | `OrbitTest` | what "the orbit camera" means: fixed point, or the subject it follows |

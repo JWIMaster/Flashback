@@ -1,6 +1,7 @@
 package com.moulberry.flashback.state;
 
 import com.moulberry.flashback.Flashback;
+import com.moulberry.flashback.editor.ui.timeline.TimelineEdits;
 import com.moulberry.flashback.keyframe.Keyframe;
 import com.moulberry.flashback.keyframe.KeyframeRegistry;
 import com.moulberry.flashback.keyframe.change.KeyframeChange;
@@ -66,6 +67,7 @@ public class CameraObjectTest {
         anUnkeyedDragPersistsInTheStoredValue();
         aWholeCameraKeyframeKeepsItsShapeWhenOnePropertyIsEdited();
         aCameraWithNoTracksEvaluatesToItsStoredValues();
+        aNewCameraStartsWhereTheViewIs();
         theInspectorLockDisciplineDoesNotBreakTheTimeline();
         aDegenerateFovOverrideIsRepairedOnLoad();
         newKeyframesRoundTripThroughJson();
@@ -825,6 +827,51 @@ public class CameraObjectTest {
         check("the evaluated values are the whole-camera keyframe's",
             evaluated.position().equals(new Vector3d(0, 0, 0), 0.0001)
                 && evaluated.yaw() == 77 && evaluated.pitch() == 21 && evaluated.roll() == 4);
+    }
+
+    /**
+     * A camera created from the timeline must arrive where the editor's view already is.
+     *
+     * <p>Creating a camera cuts to it, and that cut is what stops spectating a player. A camera left
+     * at the origin turns that into a jump to the middle of nowhere, which is the behaviour this
+     * guards. The pose is handed in explicitly because capturing it needs a live client; the check is
+     * that {@code addCamera} starts the camera it creates at that pose rather than inventing a place.
+     */
+    private static void aNewCameraStartsWhereTheViewIs() {
+        EditorState state = new EditorState();
+        EditorScene scene = sceneOf(state);
+        EditorCamera.Pose pose = new EditorCamera.Pose(123.5, 64.25, -987.75, 42.0f, -17.5f, 3.0f);
+
+        TimelineEdits.addCamera(scene, state, EditorCamera.Kind.FREE, 10, pose);
+
+        check("creating a camera adds exactly one camera", scene.cameras.size() == 1);
+        EditorCamera created = scene.cameras.get(0);
+        check("a new camera starts at the pose the view was showing",
+            created.x == pose.x() && created.y == pose.y() && created.z == pose.z()
+                && created.yaw == pose.yaw() && created.pitch == pose.pitch() && created.roll == pose.roll());
+        check("a new camera is not left at the origin",
+            created.x != 0 || created.y != 0 || created.z != 0 || created.yaw != 0);
+        check("a new camera's fov is left unset", created.fov == -1.0f);
+        check("a new camera owns its first track",
+            scene.keyframeTracks.stream().anyMatch(track -> created.id.equals(track.cameraId)));
+        check("the scene cuts to the new camera at the cursor", scene.resolveCameraAt(10) == created);
+
+        // The pose is where the camera starts, not something it animates: a starting position must
+        // not become a keyframe the user never asked for.
+        check("the started pose is a stored value, not a keyframe",
+            scene.keyframeTracks.stream().filter(track -> created.id.equals(track.cameraId))
+                .allMatch(track -> track.keyframesByTick.isEmpty()));
+
+        // The same rule has to hold for the other kinds, whose stored values the inspector shows and
+        // evaluates even though only a free camera applies them to the output.
+        EditorState orbitState = new EditorState();
+        EditorScene orbitScene = sceneOf(orbitState);
+        TimelineEdits.addCamera(orbitScene, orbitState, EditorCamera.Kind.ORBIT, 0, pose);
+        TimelineEdits.addCamera(orbitScene, orbitState, EditorCamera.Kind.SPECTATE, 0, pose);
+        check("an orbit camera also starts where the view was",
+            orbitScene.cameras.get(0).x == pose.x() && orbitScene.cameras.get(0).yaw == pose.yaw());
+        check("a spectate camera also starts where the view was",
+            orbitScene.cameras.get(1).x == pose.x() && orbitScene.cameras.get(1).yaw == pose.yaw());
     }
 
     /** A camera with no tracks at all evaluates to its stored values, and drives nothing. */
