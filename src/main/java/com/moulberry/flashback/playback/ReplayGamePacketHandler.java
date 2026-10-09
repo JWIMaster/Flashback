@@ -479,14 +479,24 @@ public class ReplayGamePacketHandler implements ClientGamePacketListener {
 
     @Override
     public void handleContainerSetSlot(ClientboundContainerSetSlotPacket packet) {
+        int slot = packet.getSlot();
+        ItemStack itemStack = packet.getItem();
+
+        // The recorded player's own inventory is not part of the container interface. It is what the
+        // first-person hotbar draws, so it is kept current whether or not containers are displayed -
+        // and, just as importantly, both the client and this side's record of it are updated together
+        // or not at all. Keeping them apart is what let them drift: the per-tick sync below only
+        // sends what differs from the record, so a change this skipped on its way to the client was
+        // also assumed to have arrived.
+        if (packet.getContainerId() == 0) {
+            mirrorOwnInventory(slot, itemStack);
+        }
+
         // Only in a replay when containers are being shown, so with that off this is skipped exactly
         // as it always was.
         if (!GuiPlayback.shouldShow()) {
             return;
         }
-
-        int slot = packet.getSlot();
-        ItemStack itemStack = packet.getItem();
 
         if (packet.getContainerId() == 0) {
             // Container zero is the recorded player's own inventory, and its slot numbers are menu
@@ -495,35 +505,6 @@ public class ReplayGamePacketHandler implements ClientGamePacketListener {
             // number straight into the inventory treats all of those as inventory indices, which
             // puts a hotbar update in an armour slot. Going through the menu is what lines the two
             // numberings up.
-            Entity entity = this.level().getEntity(this.localPlayerId);
-            if (entity instanceof Player player) {
-                AbstractContainerMenu inventoryMenu = player.inventoryMenu;
-                if (slot >= 0 && slot < inventoryMenu.slots.size()) {
-                    inventoryMenu.getSlot(slot).set(itemStack.copy());
-                }
-
-                for (ReplayPlayer replayViewer : this.replayServer.getReplayViewers()) {
-                    if (Objects.equals(replayViewer.lastFirstPersonDataUUID, player.getUUID())) {
-                        if (slot >= 0 && slot < inventoryMenu.slots.size()) {
-                            net.minecraft.world.inventory.Slot menuSlot = inventoryMenu.getSlot(slot);
-                            if (menuSlot.container == player.getInventory()) {
-                                // The payload sets a slot of the recorded player's own inventory, so it
-                                // has to carry an inventory index and not the menu's. A menu puts the
-                                // hotbar at 36 and the armour at 5; the inventory puts the hotbar at 0
-                                // and the armour at 36. Sending the menu's number for a hotbar change
-                                // wrote it into the armour, offhand, body and saddle instead - which is
-                                // what made the hotbar and the first-person view look wrong.
-                                int inventoryIndex = menuSlot.getContainerSlot();
-                                if (inventoryIndex < replayViewer.lastFirstPersonHotbarItems.length) {
-                                    replayViewer.lastFirstPersonHotbarItems[inventoryIndex] = itemStack.copy();
-                                }
-                                ServerPlayNetworking.send(replayViewer,
-                                    new FlashbackRemoteSetSlot(player.getId(), inventoryIndex, itemStack.copy()));
-                            }
-                        }
-                    }
-                }
-            }
         }
 
         // Whether or not it was the player's own inventory, a container the recording has open has
@@ -1240,6 +1221,49 @@ public class ReplayGamePacketHandler implements ClientGamePacketListener {
         forward(clientboundSetPlayerTeamPacket);
     }
 
+    /**
+     * Applies a menu slot of the recorded player's own inventory to the player, their interface and
+     * the viewer's first-person hotbar.
+     *
+     * <p>The slot arrives numbered as a menu slot - the first five are the crafting grid, the next
+     * four are armour, then the main inventory, then the hotbar and the offhand - and the client is
+     * told the number it needs, which is the inventory's own. Writing one number where the other is
+     * meant is what puts a hotbar change in an armour slot, or a chest's contents in a hotbar.
+     */
+    private void mirrorOwnInventory(int slot, ItemStack itemStack) {
+        Entity entity = this.level().getEntity(this.localPlayerId);
+        if (!(entity instanceof Player player)) {
+            return;
+        }
+        AbstractContainerMenu inventoryMenu = player.inventoryMenu;
+        if (slot < 0 || slot >= inventoryMenu.slots.size()) {
+            return;
+        }
+
+        inventoryMenu.getSlot(slot).set(itemStack.copy());
+
+        net.minecraft.world.inventory.Slot menuSlot = inventoryMenu.getSlot(slot);
+        if (menuSlot.container != player.getInventory()) {
+            // A crafting grid slot is not a slot of the player's inventory and has no inventory
+            // number to be given.
+            return;
+        }
+        int inventoryIndex = menuSlot.getContainerSlot();
+
+        for (ReplayPlayer replayViewer : this.replayServer.getReplayViewers()) {
+            if (Objects.equals(replayViewer.lastFirstPersonDataUUID, player.getUUID())) {
+                if (inventoryIndex < replayViewer.lastFirstPersonHotbarItems.length) {
+                    replayViewer.lastFirstPersonHotbarItems[inventoryIndex] = itemStack.copy();
+                }
+                // DIAGNOSTIC (temporary)
+                Flashback.LOGGER.info("[hotbar-diag] fromSlot={} inventoryIndex={} item={} viewer={}",
+                    slot, inventoryIndex, itemStack, replayViewer.getName().getString());
+                ServerPlayNetworking.send(replayViewer,
+                    new FlashbackRemoteSetSlot(player.getId(), inventoryIndex, itemStack.copy()));
+            }
+        }
+    }
+
     @Override
     public void handleSetPlayerInventory(ClientboundSetPlayerInventoryPacket clientboundSetPlayerInventoryPacket) {
         Entity entity = this.level().getEntity(this.localPlayerId);
@@ -1248,7 +1272,7 @@ public class ReplayGamePacketHandler implements ClientGamePacketListener {
             ItemStack itemStack = clientboundSetPlayerInventoryPacket.contents();
             player.getInventory().setItem(slot, itemStack);
 
-            if (slot < 0 || slot > 9) {
+            if (slot < 0 || slot > 8) {
                 return;
             }
 
