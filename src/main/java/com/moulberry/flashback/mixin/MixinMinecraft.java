@@ -26,12 +26,9 @@ import com.moulberry.flashback.state.EditorState;
 import com.moulberry.flashback.state.EditorStateManager;
 import com.moulberry.flashback.exporting.PerfectFrames;
 import com.moulberry.flashback.playback.ReplayServer;
-import com.moulberry.flashback.playback.PlaybackTimingTrace;
 import com.moulberry.flashback.ext.MinecraftExt;
-import com.moulberry.flashback.ext.ClientLevelExt;
 import com.moulberry.flashback.editor.ui.ReplayUI;
 import com.moulberry.flashback.visuals.AccurateEntityPositionHandler;
-import com.moulberry.flashback.visuals.WeatherAnimationDiagnostics;
 import it.unimi.dsi.fastutil.floats.FloatUnaryOperator;
 import net.minecraft.client.gui.Gui;
 import net.minecraft.server.MinecraftServer;
@@ -292,8 +289,6 @@ public abstract class MixinMinecraft extends ReentrantBlockableEventLoop<Runnabl
     @Inject(method = "disconnect(Lnet/minecraft/client/gui/screens/Screen;ZZ)V", at = @At("HEAD"))
     public void disconnectHead(Screen screen, boolean isTransferring, boolean stopSounds, CallbackInfo ci) {
         AccurateEntityPositionHandler.reset();
-        WeatherAnimationDiagnostics.reset();
-        this.flashback$finishPlaybackTiming();
         try {
             if (Flashback.getConfig().recordingControls.automaticallyFinish && Flashback.RECORDER != null && !isTransferring) {
                 Flashback.finishRecordingReplay();
@@ -328,12 +323,10 @@ public abstract class MixinMinecraft extends ReentrantBlockableEventLoop<Runnabl
             try {
                 PerfectFrames.enable();
                 AccurateEntityPositionHandler.reset();
-                WeatherAnimationDiagnostics.reset();
                 Flashback.EXPORT_JOB.run();
             } finally {
                 PerfectFrames.disable();
                 AccurateEntityPositionHandler.reset();
-                WeatherAnimationDiagnostics.reset();
                 Flashback.EXPORT_JOB = null;
             }
         }
@@ -379,8 +372,6 @@ public abstract class MixinMinecraft extends ReentrantBlockableEventLoop<Runnabl
         ReplayServer replayServer = Flashback.getReplayServer();
         if (replayServer == null) {
             AccurateEntityPositionHandler.reset();
-            WeatherAnimationDiagnostics.reset();
-            this.flashback$finishPlaybackTiming();
             FlashbackAudioManager.stopAll();
             return;
         }
@@ -427,80 +418,6 @@ public abstract class MixinMinecraft extends ReentrantBlockableEventLoop<Runnabl
         }
         if (!replayServer.doClientRendering()) {
             ci.cancel();
-        }
-    }
-
-    @Unique
-    private ReplayServer playbackTimingServer;
-    @Unique
-    private PlaybackTimingTrace playbackTimingTrace;
-
-    @Override
-    public void flashback$capturePlaybackTiming(double cameraX, double cameraY, double cameraZ,
-                                                float cameraYaw, float cameraPitch, float cameraPartial, int cameraEntityId,
-                                                boolean accurateCameraData) {
-        ReplayServer replayServer = Flashback.getReplayServer();
-        if (replayServer == null) {
-            this.flashback$finishPlaybackTiming();
-            return;
-        }
-        // Diagnostic recording is already opt-in. Capture one short segment per unpause, without
-        // disk I/O on the game thread or changing any clock/interpolation values. Pausing flushes a
-        // short capture and rearms it, so arranging a reproduction does not consume the only trace.
-        if (!Flashback.getConfig().internal.recordGuiEvents || Flashback.isExporting()
-            || this.level == null || replayServer.replayPaused) {
-            this.flashback$finishPlaybackTiming();
-            return;
-        }
-        if (this.playbackTimingServer != replayServer) {
-            this.flashback$finishPlaybackTiming();
-            this.playbackTimingServer = replayServer;
-            this.playbackTimingTrace = new PlaybackTimingTrace();
-            Flashback.LOGGER.info("Capturing 15 seconds of replay playback timing for diagnostics");
-        }
-        if (this.playbackTimingTrace.finished()) return;
-        Entity entity = this.level.getEntity(replayServer.getLocalPlayerId());
-        TickRateManager ticks = this.level.tickRateManager();
-        var frameLimiter = Minecraft.getInstance().getFramerateLimitTracker();
-        boolean complete = this.playbackTimingTrace.add(new PlaybackTimingTrace.Sample(
-            Util.getNanos(), this.clientTickCount, this.level.getGameTime(),
-            this.deltaTracker.getGameTimeDeltaPartialTick(true), replayServer.getPartialReplayTick(),
-            replayServer.replayPaused, ticks.isFrozen(), ticks.runsNormally(),
-            entity == null ? -1 : entity.getId(), entity == null ? -1 : entity.tickCount,
-            entity == null ? Double.NaN : entity.getX(), entity == null ? Double.NaN : entity.getY(),
-            entity == null ? Double.NaN : entity.getZ(), entity == null ? Double.NaN : entity.xo,
-            entity == null ? Double.NaN : entity.yo, entity == null ? Double.NaN : entity.zo,
-            frameLimiter.getFramerateLimit(), frameLimiter.getThrottleReason().name(),
-            ((ClientLevelExt) this.level).flashback$getAnimationGameTime(),
-            cameraX, cameraY, cameraZ, cameraYaw, cameraPitch, cameraPartial, cameraEntityId, accurateCameraData));
-        if (complete) this.flashback$writePlaybackTiming(this.playbackTimingTrace);
-    }
-
-    @Unique
-    private void flashback$finishPlaybackTiming() {
-        if (this.playbackTimingTrace != null && this.playbackTimingTrace.finish()) {
-            this.flashback$writePlaybackTiming(this.playbackTimingTrace);
-        }
-        this.playbackTimingServer = null;
-        this.playbackTimingTrace = null;
-    }
-
-    @Unique
-    private void flashback$writePlaybackTiming(PlaybackTimingTrace capture) {
-        var path = Minecraft.getInstance().gameDirectory.toPath().resolve("flashback")
-            .resolve("playback-timing-" + java.util.UUID.randomUUID() + ".csv");
-        try {
-            Util.ioPool().execute(() -> {
-                try {
-                    java.nio.file.Files.createDirectories(path.getParent());
-                    java.nio.file.Files.writeString(path, capture.toCsv(), java.nio.file.StandardOpenOption.CREATE_NEW);
-                    Flashback.LOGGER.info("Replay playback timing saved to {}", path);
-                } catch (java.io.IOException exception) {
-                    Flashback.LOGGER.warn("Could not save replay playback timing", exception);
-                }
-            });
-        } catch (java.util.concurrent.RejectedExecutionException exception) {
-            Flashback.LOGGER.warn("Playback timing capture skipped because the I/O executor is shutting down");
         }
     }
 

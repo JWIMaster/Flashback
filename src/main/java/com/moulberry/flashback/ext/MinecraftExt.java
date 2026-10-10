@@ -19,8 +19,5 @@ public interface MinecraftExt {
     void flashback$startReplayServer(LevelStorageSource.LevelStorageAccess levelStorageAccess, PackRepository packRepository, WorldStem stem, Optional<GameRules> gameRules, StartReplayServerInfo info);
     float flashback$getLocalPlayerPartialTick(float originalPartialTick);
     boolean flashback$overridingLocalPlayerTimer();
-    void flashback$capturePlaybackTiming(double cameraX, double cameraY, double cameraZ,
-                                        float cameraYaw, float cameraPitch, float cameraPartial, int cameraEntityId,
-                                        boolean accurateCameraData);
 
 }

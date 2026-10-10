@@ -101,17 +101,6 @@ public abstract class MixinCamera {
         }
     }
 
-    @Inject(method = "update", at = @At("RETURN"))
-    private void flashback$captureRenderedCamera(DeltaTracker deltaTracker, CallbackInfo ci) {
-        if (Flashback.isInReplay() && Flashback.getConfig().internal.recordGuiEvents && this.entity != null) {
-            Camera camera = (Camera) (Object) this;
-            ((MinecraftExt) this.minecraft).flashback$capturePlaybackTiming(
-                this.position.x, this.position.y, this.position.z, camera.yRot(), camera.xRot(),
-                camera.getCameraEntityPartialTicks(deltaTracker), this.entity.getId(),
-                AccurateEntityPositionHandler.hasAccurateData(this.entity.getId()));
-        }
-    }
-
     @WrapMethod(method = "getCameraEntityPartialTicks")
     public float getCameraEntityPartialTicks(DeltaTracker deltaTracker, Operation<Float> original) {
         float originalPartialTick = original.call(deltaTracker);

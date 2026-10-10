@@ -15,10 +15,6 @@ public final class PlaybackTimingTest {
     public static void main(String[] args) throws Exception {
         replayDoesNotSendSyntheticTimeCorrections();
         normalTickBoundaryDoesNotRewindAnimationTime();
-        capturePreservesRawClockDiscontinuities();
-        captureIsBoundedAndFinishesOnlyOnce();
-        incompleteCaptureCannotBeSerialized();
-        pauseAndDisconnectCanFlushShortCaptures();
         playbackRefreshesIdleTimerWithoutChangingFpsCap();
         firstPersonExtractionBypassesOnlyWorldCulling();
         accurateCameraAlignsBeforeFrustumWithEffectivePartialTick();
@@ -74,53 +70,6 @@ public final class PlaybackTimingTest {
             check(animationTime >= previous, "a wrapped residual is paired with an advanced animation endpoint");
             previous = animationTime;
         }
-    }
-
-    private static PlaybackTimingTrace.Sample sample(long nanos, long gameTime, float partial) {
-        return new PlaybackTimingTrace.Sample(nanos, 100, gameTime, partial, 100.5,
-            false, false, true, 7, 100, 1, 2, 3, 0, 1, 2, 120, "NONE",
-            200, 10, 20, 30, 90, 0, 0.5f, 7, true);
-    }
-
-    private static void capturePreservesRawClockDiscontinuities() {
-        PlaybackTimingTrace trace = new PlaybackTimingTrace();
-        check(!trace.add(sample(5_000, 200, 0.9f)), "capture begins without disk work");
-        check(!trace.add(sample(10_000, 199, 0.1f)), "backward game-time sample is preserved");
-        check(trace.add(sample(15_000_005_000L, 210, 0.2f)), "capture ends after fifteen seconds");
-        String[] lines = trace.toCsv().strip().split("\\n");
-        check(lines.length == 4, "every sampled frame is recorded");
-        check(lines[1].startsWith("0,100,200,0.9,"), "trace uses relative monotonic timestamps");
-        check(lines[2].startsWith("5000,100,199,0.1,"), "trace does not hide backward clock corrections");
-        for (String line : lines) check(line.split(",").length == 27, "CSV schema stays aligned");
-    }
-
-    private static void captureIsBoundedAndFinishesOnlyOnce() {
-        PlaybackTimingTrace trace = new PlaybackTimingTrace();
-        int completions = 0;
-        for (int i = 0; i < 20_000; i++) {
-            if (trace.add(sample(i, i, 0))) completions++;
-        }
-        check(completions == 1 && trace.finished(), "high frame rates cannot cause unlimited capture or repeated writes");
-        check(trace.toCsv().lines().count() == 8193, "trace is limited to 8192 frames plus its header");
-    }
-
-    private static void incompleteCaptureCannotBeSerialized() {
-        try {
-            new PlaybackTimingTrace().toCsv();
-            throw new AssertionError("incomplete capture was serialized");
-        } catch (IllegalStateException expected) {
-            // Serialization must happen after capture finishes, on the I/O executor.
-        }
-    }
-
-    private static void pauseAndDisconnectCanFlushShortCaptures() {
-        PlaybackTimingTrace trace = new PlaybackTimingTrace();
-        check(!trace.finish(), "an empty capture creates no file");
-        trace.add(sample(1000, 100, 0.25f));
-        check(trace.finish(), "pause/disconnect flush a short capture");
-        check(!trace.finish(), "lifecycle flush cannot write the same trace twice");
-        check(trace.toCsv().lines().count() == 2, "short capture retains its sample");
-        check(!trace.add(sample(2000, 101, 0.5f)), "a flushed capture cannot be mutated during background serialization");
     }
 
     private static ClassNode builtClass(String name) throws Exception {
@@ -237,8 +186,6 @@ public final class PlaybackTimingTest {
             "replay preview and export share one continuous clock");
         check(!weather.contains("isExporting()"), "the export must not fall back to the jumpy recorded world clock");
         check(weather.contains("flashback$getAnimationGameTime()"), "weather uses the continuous world-tick clock");
-        check(weather.contains("WeatherAnimationDiagnostics.used(rawGameTime, animationTick, true)"),
-            "the trace measures the tick the renderer is actually given, not the raw level clock");
         String level = Files.readString(Path.of("src/main/java/com/moulberry/flashback/mixin/visuals/MixinClientLevel.java"));
         check(level.contains("@Inject(method = \"tickTime\", at = @At(\"HEAD\"))"),
             "animation ticks advance at vanilla's actual world tick boundary");
@@ -251,11 +198,6 @@ public final class PlaybackTimingTest {
         int handlerEnd = flashback.indexOf("registerGlobalReceiver(", seekHandler + 30);
         check(!flashback.substring(seekHandler, handlerEnd).contains("AnimationGameTime"),
             "the real seek/snapshot packet must not re-phase the weather pattern");
-        String diagnostics = Files.readString(Path.of("src/main/java/com/moulberry/flashback/visuals/WeatherAnimationDiagnostics.java"));
-        check(diagnostics.contains("TICK_EPSILON") && diagnostics.contains("INTENSITY_EPSILON"),
-            "the weather diagnostic covers both scroll time and column intensity");
-        check(diagnostics.contains("Weather clock engaged"),
-            "the log proves whether the continuous weather clock is actually in use");
     }
 
     private static void accurateWireTimingDoesNotChangeExistingRecordings() throws Exception {

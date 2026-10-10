@@ -75,13 +75,6 @@ public class AccurateEntityPositionHandler {
         return timeline;
     }
 
-    /** Read-only diagnostic: distinguish source-timed camera data from the vanilla fallback. */
-    public static boolean hasAccurateData(int entityId) {
-        if (!Flashback.isInReplay() || Flashback.getConfig().advanced.disableIncreasedFirstPersonUpdates) return false;
-        if (playbackFrame && !Flashback.isExporting()) return playbackTimeline(entityId) != null;
-        return currentData != null && currentData.containsKey(entityId);
-    }
-
     public static void tick() {
         currentData = pendingData;
         pendingData = null;
