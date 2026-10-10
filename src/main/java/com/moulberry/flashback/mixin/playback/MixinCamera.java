@@ -83,13 +83,14 @@ public abstract class MixinCamera {
     @Shadow
     private boolean isPanoramicMode;
 
-    @Inject(method = "update", at = @At(value = "RETURN"))
-    public void afterSetPosition(DeltaTracker deltaTracker, CallbackInfo ci)  {
+    // Align before update builds its culling frustum, using the same effective partial tick as
+    // vanilla (including frozen entities and the free camera's independent local-player timer).
+    @Inject(method = "alignWithEntity", at = @At(value = "RETURN"))
+    public void afterSetPosition(float partialTick, CallbackInfo ci)  {
         if (this.entity == null) {
             return;
         }
 
-        float partialTick = deltaTracker.getGameTimeDeltaPartialTick(false);
         Vector2f rotation = AccurateEntityPositionHandler.getAccurateRotation(this.entity, partialTick);
         if (rotation != null) {
             this.setRotation(rotation.y, rotation.x);
@@ -97,6 +98,17 @@ public abstract class MixinCamera {
         Vector3d position = AccurateEntityPositionHandler.getAccuratePosition(this.entity, partialTick);
         if (position != null) {
             this.setPosition(position.x, position.y + Mth.lerp(partialTick, this.eyeHeightOld, this.eyeHeight), position.z);
+        }
+    }
+
+    @Inject(method = "update", at = @At("RETURN"))
+    private void flashback$captureRenderedCamera(DeltaTracker deltaTracker, CallbackInfo ci) {
+        if (Flashback.isInReplay() && Flashback.getConfig().internal.recordGuiEvents && this.entity != null) {
+            Camera camera = (Camera) (Object) this;
+            ((MinecraftExt) this.minecraft).flashback$capturePlaybackTiming(
+                this.position.x, this.position.y, this.position.z, camera.yRot(), camera.xRot(),
+                camera.getCameraEntityPartialTicks(deltaTracker), this.entity.getId(),
+                AccurateEntityPositionHandler.hasAccurateData(this.entity.getId()));
         }
     }
 

@@ -68,7 +68,11 @@ for suite in \
     com.moulberry.flashback.keyframe.OrbitTest \
     com.moulberry.flashback.keybind.ScrollBindingsTest \
     com.moulberry.flashback.gui.GuiLogTest \
-    com.moulberry.flashback.gui.ContainerWireTest; do
+    com.moulberry.flashback.gui.ContainerWireTest \
+    com.moulberry.flashback.playback.PlaybackTimingTest \
+    com.moulberry.flashback.playback.AccuratePositionTimelineTest \
+    com.moulberry.flashback.playback.WeatherColumnOrientationTest \
+    com.moulberry.flashback.playback.WeatherTextureCoordinatesTest; do
     run_check "$(basename "$suite")" "$suite"
 done
 
@@ -76,6 +80,7 @@ run_check "ImGuiPairingCheck" com.moulberry.flashback.ImGuiPairingCheck \
     src/main/java/com/moulberry/flashback/editor/ui/windows/TimelineWindow.java \
     src/main/java/com/moulberry/flashback/editor/ui/windows/CameraInspectorWindow.java
 run_check "ContainerGuiCheck" com.moulberry.flashback.gui.ContainerGuiCheck src/main/java
+run_check "MixinTargetCheck" com.moulberry.flashback.MixinTargetCheck src/main/java
 
 if ! bash devtools/checks/run-replay-inventory.sh; then
     failures=$((failures + 1))

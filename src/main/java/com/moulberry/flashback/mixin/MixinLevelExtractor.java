@@ -23,7 +23,6 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.tags.FluidTags;
 import net.minecraft.util.ARGB;
 import net.minecraft.world.effect.MobEffects;
-import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.level.block.RenderShape;
 import net.minecraft.world.level.block.state.BlockState;
@@ -42,9 +41,6 @@ public abstract class MixinLevelExtractor {
 
     @Shadow
     private @Nullable ClientLevel level;
-
-    @Shadow
-    protected abstract EntityRenderState extractEntity(Entity entity, float partialTickTime);
 
     @Shadow
     @Final
@@ -88,7 +84,11 @@ public abstract class MixinLevelExtractor {
 
         state.hasPlayer = true;
         float playerPartialTick = deltaTracker.getGameTimeDeltaPartialTick(!this.level.tickRateManager().isEntityFrozen(player));
-        EntityRenderState entityRenderState = this.extractEntity(player, playerPartialTick);
+        // First-person state is needed even if the player's world model was occluded before a
+        // camera switch. LevelExtractor.extractEntity is a world-culling hook: Entity Culling can
+        // return an empty EntityRenderState there, dropping the spectated player's hands. Extract
+        // directly from the dispatcher without bypassing culling for any ordinary world entities.
+        EntityRenderState entityRenderState = this.minecraft.getEntityRenderDispatcher().extractEntity(player, playerPartialTick);
         if (entityRenderState instanceof AvatarRenderState) {
             AvatarRenderState avatarRenderState = (AvatarRenderState)entityRenderState;
             state.avatarRenderState = avatarRenderState;

@@ -23,12 +23,87 @@ public class AccurateEntityPositionHandler {
     private static Int2ObjectMap<List<PositionAndAngle>> currentData = null;
     private static Int2ObjectMap<List<PositionAndAngle>> pendingData = null;
 
+    private static final Int2ObjectMap<AccuratePositionTimeline> playbackData = new Int2ObjectOpenHashMap<>();
+    private static ReplayServer playbackServer;
+    private static long playbackEpoch = Long.MIN_VALUE;
+    private static double frameReplayTick;
+    private static boolean playbackFrame;
+    private static boolean frameWorldFrozen;
+
+    public static void reset() {
+        currentData = null;
+        pendingData = null;
+        playbackData.clear();
+        playbackServer = null;
+        playbackEpoch = Long.MIN_VALUE;
+        playbackFrame = false;
+        frameWorldFrozen = false;
+    }
+
+    /** Sample one coherent source-domain time for both camera position and rotation this frame. */
+    public static void beginFrame() {
+        if (Flashback.getConfig().advanced.disableIncreasedFirstPersonUpdates) {
+            reset();
+            return;
+        }
+        ReplayServer server = Flashback.getReplayServer();
+        if (server != playbackServer) {
+            reset();
+            playbackServer = server;
+        }
+        if (server == null) return;
+        ReplayServer.PlaybackTime time = server.getPlaybackTime();
+        if (time.epoch() > playbackEpoch) {
+            playbackData.clear();
+            playbackEpoch = time.epoch();
+        }
+        playbackFrame = time.epoch() == playbackEpoch;
+        frameReplayTick = time.tick();
+        ClientLevel level = Minecraft.getInstance().level;
+        frameWorldFrozen = server.replayPaused || level != null && !level.tickRateManager().runsNormally();
+    }
+
+    private static AccuratePositionTimeline playbackTimeline(int entityId) {
+        AccuratePositionTimeline timeline = playbackData.get(entityId);
+        if (timeline == null || timeline.size() == 0) return null;
+        // Bridge short delivery gaps, not indefinite absence after the recorded player stops
+        // producing high-frequency data. Pauses/freeze keyframes intentionally retain the pose.
+        if (!frameWorldFrozen && frameReplayTick - timeline.latestSourceTick() > 5) {
+            playbackData.remove(entityId); // Do not revive an expired override when playback pauses.
+            return null;
+        }
+        return timeline;
+    }
+
+    /** Read-only diagnostic: distinguish source-timed camera data from the vanilla fallback. */
+    public static boolean hasAccurateData(int entityId) {
+        if (!Flashback.isInReplay() || Flashback.getConfig().advanced.disableIncreasedFirstPersonUpdates) return false;
+        if (playbackFrame && !Flashback.isExporting()) return playbackTimeline(entityId) != null;
+        return currentData != null && currentData.containsKey(entityId);
+    }
+
     public static void tick() {
         currentData = pendingData;
         pendingData = null;
     }
 
     public static void update(FlashbackAccurateEntityPosition data) {
+        if (!Flashback.isExporting() && data.replayTick() >= 0) {
+            ReplayServer server = Flashback.getReplayServer();
+            if (server != playbackServer) {
+                reset();
+                playbackServer = server;
+            }
+            if (data.replayEpoch() < playbackEpoch) return;
+            if (data.replayEpoch() > playbackEpoch) {
+                playbackData.clear();
+                playbackEpoch = data.replayEpoch();
+            }
+            playbackData.computeIfAbsent(data.entityId(), ignored -> new AccuratePositionTimeline())
+                .put(data.replayTick(), data.positionAndAngles());
+            return;
+        }
+        // Deterministic export retains its existing client-partial-tick mapping.
         if (pendingData == null) {
             pendingData = new Int2ObjectOpenHashMap<>();
         }
@@ -37,6 +112,12 @@ public class AccurateEntityPositionHandler {
 
     @Nullable
     public static Vector2f getAccurateRotation(Entity entity, float partialTick) {
+        if (!Flashback.isInReplay() || Flashback.getConfig().advanced.disableIncreasedFirstPersonUpdates) return null;
+        if (playbackFrame && !Flashback.isExporting()) {
+            AccuratePositionTimeline timeline = playbackTimeline(entity.getId());
+            PositionAndAngle pose = timeline == null ? null : timeline.sample(frameReplayTick);
+            return pose == null ? null : new Vector2f(pose.pitch(), pose.yaw());
+        }
         if (currentData != null && currentData.containsKey(entity.getId())) {
             List<PositionAndAngle> positionAndAngles = currentData.get(entity.getId());
             float amount = partialTick * (positionAndAngles.size() - 1);
@@ -63,10 +144,16 @@ public class AccurateEntityPositionHandler {
 
     @Nullable
     public static Vector3d getAccuratePosition(Entity entity, float partialTick) {
+        if (!Flashback.isInReplay() || Flashback.getConfig().advanced.disableIncreasedFirstPersonUpdates) return null;
         if (entity.isPassenger() || !Minecraft.getInstance().options.getCameraType().isFirstPerson()) {
             return null;
         }
 
+        if (playbackFrame && !Flashback.isExporting()) {
+            AccuratePositionTimeline timeline = playbackTimeline(entity.getId());
+            PositionAndAngle pose = timeline == null ? null : timeline.sample(frameReplayTick);
+            return pose == null ? null : new Vector3d(pose.x(), pose.y(), pose.z());
+        }
         if (currentData != null && currentData.containsKey(entity.getId())) {
             List<PositionAndAngle> positionAndAngles = currentData.get(entity.getId());
             float amount = partialTick * (positionAndAngles.size() - 1);
@@ -93,6 +180,7 @@ public class AccurateEntityPositionHandler {
     }
 
     public static void apply(ClientLevel level, DeltaTracker deltaTracker) {
+        if (Flashback.getConfig().advanced.disableIncreasedFirstPersonUpdates) return;
         if (currentData == null || level == null) {
             return;
         }

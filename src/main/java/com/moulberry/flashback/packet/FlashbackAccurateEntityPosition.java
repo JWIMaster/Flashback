@@ -11,10 +11,30 @@ import net.minecraft.world.item.ItemStack;
 import java.util.ArrayList;
 import java.util.List;
 
-public record FlashbackAccurateEntityPosition(int entityId, List<PositionAndAngle> positionAndAngles) implements CustomPacketPayload {
+public record FlashbackAccurateEntityPosition(int entityId, List<PositionAndAngle> positionAndAngles,
+                                             int replayTick, long replayEpoch) implements CustomPacketPayload {
+    public FlashbackAccurateEntityPosition(int entityId, List<PositionAndAngle> positionAndAngles) {
+        this(entityId, positionAndAngles, -1, -1);
+    }
     public static final Type<FlashbackAccurateEntityPosition> TYPE = new Type<>(Flashback.createIdentifier("accurate_entity_position"));
 
+    // Keep the recording codec byte-for-byte compatible with existing replay files.
     public static final StreamCodec<FriendlyByteBuf, FlashbackAccurateEntityPosition> STREAM_CODEC = new AccurateEntityPositionStreamCodec();
+    // Only the live replay connection carries source-domain timing; recordings have action ticks.
+    public static final StreamCodec<FriendlyByteBuf, FlashbackAccurateEntityPosition> PLAYBACK_STREAM_CODEC = new StreamCodec<>() {
+        @Override
+        public FlashbackAccurateEntityPosition decode(FriendlyByteBuf buffer) {
+            FlashbackAccurateEntityPosition data = STREAM_CODEC.decode(buffer);
+            return new FlashbackAccurateEntityPosition(data.entityId(), data.positionAndAngles(), buffer.readVarInt(), buffer.readVarLong());
+        }
+
+        @Override
+        public void encode(FriendlyByteBuf buffer, FlashbackAccurateEntityPosition data) {
+            STREAM_CODEC.encode(buffer, data);
+            buffer.writeVarInt(data.replayTick());
+            buffer.writeVarLong(data.replayEpoch());
+        }
+    };
 
     @Override
     public Type<? extends CustomPacketPayload> type() {

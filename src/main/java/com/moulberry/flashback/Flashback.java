@@ -226,7 +226,7 @@ public class Flashback implements ModInitializer, ClientModInitializer {
         PayloadTypeRegistry.clientboundPlay().register(FlashbackRemoteSetSlot.TYPE, FlashbackRemoteSetSlot.STREAM_CODEC);
         PayloadTypeRegistry.clientboundPlay().register(FlashbackRemoteContainer.TYPE, FlashbackRemoteContainer.STREAM_CODEC);
         PayloadTypeRegistry.clientboundPlay().register(FlashbackVoiceChatSound.TYPE, FlashbackVoiceChatSound.STREAM_CODEC);
-        PayloadTypeRegistry.clientboundPlay().register(FlashbackAccurateEntityPosition.TYPE, FlashbackAccurateEntityPosition.STREAM_CODEC);
+        PayloadTypeRegistry.clientboundPlay().register(FlashbackAccurateEntityPosition.TYPE, FlashbackAccurateEntityPosition.PLAYBACK_STREAM_CODEC);
         PayloadTypeRegistry.clientboundPlay().register(FlashbackSetBorderLerpStartTime.TYPE, FlashbackSetBorderLerpStartTime.STREAM_CODEC);
         PayloadTypeRegistry.clientboundPlay().register(FlashbackRawCustomPayload.TYPE, FlashbackRawCustomPayload.STREAM_CODEC);
     }
@@ -360,7 +360,9 @@ public class Flashback implements ModInitializer, ClientModInitializer {
 
         ClientPlayNetworking.registerGlobalReceiver(FlashbackInstantlyLerp.TYPE, (payload, context) -> {
             if (Flashback.isInReplay()) {
-                for (Entity entity : Minecraft.getInstance().level.entitiesForRendering()) {
+                ClientLevel level = Minecraft.getInstance().level;
+                if (level == null) return;
+                for (Entity entity : level.entitiesForRendering()) {
                     if (entity.isInterpolating()) {
                         var interpolation = entity.getInterpolation();
                         entity.snapTo(interpolation.target().position(), interpolation.target().yRot(), interpolation.target().xRot());

@@ -490,21 +490,25 @@ public class ReplayServer extends IntegratedServer {
         return this.targetTick;
     }
 
-    private int lastReplayTick;
     private long lastTickTimeNanos;
+    private long accuratePositionEpoch;
+    private record PlaybackClock(long epoch, int startTick, int endTick, long startNanos, long nanosPerTick, boolean playing) {}
+    private volatile PlaybackClock playbackClock = new PlaybackClock(0, 0, 0, 0, 50_000_000L, false);
+    public record PlaybackTime(long epoch, double tick) {}
+
+    public PlaybackTime getPlaybackTime() {
+        // Publish epoch, tick, rate and timer origin together: the render thread must never combine
+        // the new tick with the previous tick's time/rate, especially across seeks or speed changes.
+        PlaybackClock clock = this.playbackClock;
+        if (this.replayPaused || this.isPaused() || !clock.playing()) {
+            return new PlaybackTime(clock.epoch(), clock.endTick());
+        }
+        double partial = (Util.getNanos() - clock.startNanos()) / (double) clock.nanosPerTick();
+        return new PlaybackTime(clock.epoch(), clock.startTick() + Math.max(0, Math.min(1, partial)));
+    }
 
     public double getPartialReplayTick() {
-        if (this.replayPaused || this.isPaused()) {
-            return this.targetTick;
-        } else {
-            long currentNanos = Util.getNanos();
-            long nanosPerTick = this.tickRateManager().nanosecondsPerTick();
-
-            double partial = (currentNanos - this.lastTickTimeNanos) / (double) nanosPerTick;
-            partial = Math.max(0, Math.min(1, partial));
-
-            return this.lastReplayTick + partial;
-        }
+        return this.getPlaybackTime().tick();
     }
 
     public int getTotalReplayTicks() {
@@ -795,7 +799,10 @@ public class ReplayServer extends IntegratedServer {
             return;
         }
 
-        var packet = FlashbackAccurateEntityPosition.STREAM_CODEC.decode(friendlyByteBuf);
+        var recorded = FlashbackAccurateEntityPosition.STREAM_CODEC.decode(friendlyByteBuf);
+        // The action precedes ActionNextTick: its samples belong to [currentTick,currentTick+1].
+        var packet = new FlashbackAccurateEntityPosition(recorded.entityId(), recorded.positionAndAngles(),
+            this.currentTick, this.accuratePositionEpoch);
 
         for (ReplayPlayer replayViewer : this.replayViewers) {
             ServerPlayNetworking.send(replayViewer, packet);
@@ -962,6 +969,14 @@ public class ReplayServer extends IntegratedServer {
         return EditorStateManager.get(this.metadata.replayIdentifier);
     }
 
+    /** Recorded time packets are authoritative; the replay server must not add live-server corrections. */
+    @Override
+    public void forceGameTimeSynchronization() {
+        // Replaces the no-op synchronizeTime(ServerLevel) override removed in the 26.1 port.
+        // Vanilla calls this every second even though replay simulation is frozen, which jumps
+        // the client's independently interpolated weather/world clock back or forward.
+    }
+
     @Override
     public boolean isReady() {
         return super.isReady() && this.initializedWithSnapshot;
@@ -984,7 +999,6 @@ public class ReplayServer extends IntegratedServer {
 
         EditorState editorState = this.getEditorState();
 
-        this.lastReplayTick = this.targetTick;
         this.lastTickTimeNanos = this.nextTickTimeNanos - this.tickRateManager().nanosecondsPerTick();
 
         // Update list of replay viewers
@@ -1025,6 +1039,9 @@ public class ReplayServer extends IntegratedServer {
         boolean normalPlayback = false;
         int tickBeforeJump = this.getReplayTick();
         if (this.jumpToTick >= 0) {
+            if (Flashback.EXPORT_JOB == null && this.jumpToTick != this.targetTick) {
+                this.accuratePositionEpoch++;
+            }
             this.targetTick = this.jumpToTick;
             this.jumpToTick = -1;
 
@@ -1086,6 +1103,10 @@ public class ReplayServer extends IntegratedServer {
                 GuiDisplayForwarder.reset(this);
             }
         }
+
+        this.playbackClock = new PlaybackClock(this.accuratePositionEpoch,
+            normalPlayback ? this.targetTick - 1 : this.targetTick, this.targetTick,
+            this.lastTickTimeNanos, this.tickRateManager().nanosecondsPerTick(), normalPlayback);
 
         ServerTickRateManager tickRateManager = this.tickRateManager();
         ((ServerTickRateManagerExt)tickRateManager).flashback$setSuppressClientUpdates(true);
