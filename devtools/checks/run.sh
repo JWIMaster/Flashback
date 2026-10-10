@@ -71,6 +71,7 @@ for suite in \
     com.moulberry.flashback.gui.ContainerWireTest \
     com.moulberry.flashback.playback.PlaybackTimingTest \
     com.moulberry.flashback.playback.AccuratePositionTimelineTest \
+    com.moulberry.flashback.playback.WeatherColumnOrientationTest \
     com.moulberry.flashback.playback.WeatherTextureCoordinatesTest; do
     run_check "$(basename "$suite")" "$suite"
 done
